@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+
+# Byte-compiled
+__pycache__/
+*.pyc
+
+# Transolver weights (large binary)
+Transolver/Transolver
+Transolver/
+
+# Lock files
+uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OMC (Claude Code internal)
+.omc/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# diary
+docs/

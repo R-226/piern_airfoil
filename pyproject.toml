@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "piern_airfoil"
+version = "0.1.0"
+description = "Unified framework for automatic airfoil optimization combining Transolver, NeuralFoil, and PiERN"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "AI Assistant", email = "example@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "torch>=2.11.0",
+    "timm>=1.0.0",
+    "einops>=0.8.0",
+    "neuralfoil>=0.3.0",
+    "matplotlib>=3.5",
+    "aerosandbox>=4.2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+    "mypy>=0.950",
+    "matplotlib>=3.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/example/cc_piern_airfoil"
+Documentation = "https://github.com/example/cc_piern_airfoil#readme"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
