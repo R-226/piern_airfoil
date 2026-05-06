@@ -12,8 +12,6 @@ import time
 
 from .agent import PPOAgent, DDPGAgent
 from .state_representation import DesignState
-from ..analysis.base import AnalysisResult, FlowConditions
-from ..parameterization.base import Parameterization
 
 
 @dataclass

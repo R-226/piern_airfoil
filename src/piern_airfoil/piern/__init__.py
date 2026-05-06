@@ -1,14 +1,19 @@
-"""PiERN module for physics-informed reinforcement learning."""
+"""
+PiERN module - Physics-informed reinforcement learning for airfoil optimization.
+"""
 
-from .policy_network import PiERNPolicyNetwork
-from .agent import PPOAgent, DDPGAgent, ReplayBuffer
+from .policy_network import PiERNPolicyNetwork, PiERNValueNetwork
+from .agent import PPOAgent, DDPGAgent
 from .state_representation import DesignState, DesignAction
+from .trainer import PiERNTrainer, TrainingConfig
 
 __all__ = [
     "PiERNPolicyNetwork",
+    "PiERNValueNetwork",
     "PPOAgent",
     "DDPGAgent",
-    "ReplayBuffer",
     "DesignState",
-    "DesignAction"
+    "DesignAction",
+    "PiERNTrainer",
+    "TrainingConfig",
 ]

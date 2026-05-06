@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 import numpy as np
 
-from ..analysis.base import AnalysisResult
-from ..parameterization.base import AirfoilGeometry
+# AnalysisResult from neuralfoil module
+from ..neuralfoil.low_fidelity import AnalysisResult
 
 
 @dataclass
