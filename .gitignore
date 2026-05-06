@@ -31,5 +31,8 @@ uv.lock
 .DS_Store
 Thumbs.db
 
+# data
+data/
+
 # diary
 docs/
