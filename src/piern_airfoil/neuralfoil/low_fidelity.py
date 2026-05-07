@@ -4,6 +4,25 @@ import aerosandbox.numpy as np
 import aerosandbox.tools.pretty_plots as p
 import aerosandbox as asb
 
+
+@dataclass
+class AnalysisResult:
+    """Result from low-fidelity airfoil analysis."""
+    CL: float
+    CD: float
+    CM: float
+    confidence: float
+    CL_func: Optional[any] = None  # for aero.derivative
+
+
+@dataclass
+class AirfoilGeometry:
+    """Airfoil geometry parameters."""
+    upper_weights: np.ndarray
+    lower_weights: np.ndarray
+    leading_edge_weight: float
+    te_thickness: float = 0.0
+
 '''
 Low-fidelity airfoil optimization using Aerosandbox's KulfanAirfoil and Opti framework.
 '''

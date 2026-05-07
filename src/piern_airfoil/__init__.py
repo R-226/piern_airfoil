@@ -3,7 +3,7 @@ PIERN-Airfoil: Unified framework for automatic airfoil optimization.
 
 Organized into three main modules:
 - neuralfoil: Fast analysis and optimization using Aerosandbox + NeuralFoil
-- transolver: High-fidelity CFD analysis (pending retraining)
+- optimization: Global optimization algorithms (CMA-ES, differential evolution)
 - piern: Physics-informed reinforcement learning for intelligent optimization
 
 Example usage:
@@ -19,23 +19,8 @@ Example usage:
 
 __version__ = "0.3.0"
 
-# Transolver module (placeholder)
-from .transolver import TransolverAnalyzer, TransolverOptimizer
-
-# PiERN module
-from .piern import (
-    PiERNPolicyNetwork,
-    PiERNValueNetwork,
-    PPOAgent,
-    DDPGAgent,
-    DesignState,
-    DesignAction,
-    PiERNTrainer,
-    TrainingConfig,
-)
-
-# UI module
-from .ui import AirfoilVisualizer
+# Optimization module
+from .thin_airfoil import GlobalAirfoilOptimizer, OptimizerConfig
 
 __all__ = [
     # Version
@@ -45,20 +30,7 @@ __all__ = [
     "NeuralFoilAnalyzer",
     "NeuralFoilOptimizer",
 
-    # Transolver (placeholder)
-    "TransolverAnalyzer",
-    "TransolverOptimizer",
-
-    # PiERN
-    "PiERNPolicyNetwork",
-    "PiERNValueNetwork",
-    "PPOAgent",
-    "DDPGAgent",
-    "DesignState",
-    "DesignAction",
-    "PiERNTrainer",
-    "TrainingConfig",
-
-    # UI
-    "AirfoilVisualizer",
+    # Global Optimization
+    "GlobalAirfoilOptimizer",
+    "OptimizerConfig",
 ]
