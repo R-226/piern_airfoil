@@ -27,7 +27,7 @@ class AirfoilGeometry:
 Low-fidelity airfoil optimization using Aerosandbox's KulfanAirfoil and Opti framework.
 '''
 
-class LowFidelityOptimizer():
+class HighFidelityOptimizer():
     def __init__(self, airfoil: asb.KulfanAirfoil, CL_targets: np.array[float], CL_weights: np.array[float], TE_thickness: float = 0.0, alpha: Optional[asb.OptiVariable] = None, RE: Optional[asb.OptiVariable] = None, mach: Optional[asb.OptiVariable] = None, aoa_low_bound: float = -5, aoa_high_bound: float = 18):
         self.airfoil = airfoil
         self.CL_targets = CL_targets
@@ -128,11 +128,11 @@ if __name__ == "__main__":
     CL_multipoint_weights = np.array([5, 6, 7, 8, 9, 10])
     Re = 500e3 * (CL_multipoint_targets / 1.25) ** -0.5
     mach = 0.03
-    Low_optimizer = LowFidelityOptimizer(airfoil=airfoil, CL_targets=CL_multipoint_targets, CL_weights=CL_multipoint_weights, RE=Re, mach=mach)
+    High_optimizer = HighFidelityOptimizer(airfoil=airfoil, CL_targets=CL_multipoint_targets, CL_weights=CL_multipoint_weights, RE=Re, mach=mach)
     
     import matplotlib.pyplot as plt
 
-    Low_optimizer.update()
+    High_optimizer.update()
     fig, ax = plt.subplots(figsize=(6, 2))
-    Low_optimizer.airfoil.draw()
+    High_optimizer.airfoil.draw()
     plt.savefig(f"test.png", dpi=300)

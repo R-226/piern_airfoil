@@ -22,7 +22,7 @@ Data Flow:
             ↓
     Pool:  mean pooling [B, E]
             ↓
-    MLP:   2-layer MLP [B, 1]
+    MLP:   5-layer MLP [B, 1]
             ↓
     Output: logits [B, 1] → sigmoid → binary decision
 
@@ -57,9 +57,9 @@ from transformers import AutoTokenizer, AutoModel
 
 MODEL_PATH = "./model/Qwen3.5-0.8B"  # Path to base model for embeddings (adjust as needed)
 
-SAVE_DIR = "./checkpoint/router/seq_router.pt"
-TRAIN_DATA = "./data/router/train_router.jsonl"
-TEST_DATA = "./data/router/test_router.jsonl"
+SAVE_DIR = "./checkpoint/t2c/seq_t2c.pt"
+TRAIN_DATA = "./data/2com/train_data.jsonl"
+TEST_DATA = "./data/2com/test_data.jsonl"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -82,8 +82,6 @@ class SeqRouter(nn.Module):
         - attention_mask: [batch_size, seq_len] binary mask
 
     Output:
-        - logits: [batch_size, 1] raw scores (sigmoid applied externally)
-        - probs: [batch_size, 1] probabilities after sigmoid
     """
 
     def __init__(
@@ -122,7 +120,7 @@ class SeqRouter(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim4, hidden_dim5),
             nn.ReLU(),
-            nn.Linear(hidden_dim5, 1)  # Output logits for binary classification
+            nn.Linear(hidden_dim5, 18)  # Output logits for binary classification
         )
 
     def forward(
@@ -136,7 +134,7 @@ class SeqRouter(nn.Module):
             input_ids: [B, T] token IDs
             attention_mask: [B, T] binary mask (optional)
         Returns:
-            Tuple of (logits, probs) where each is [B, 1]
+            Tuple of (logits, probs) where each is [B, 18]
         """
         input_embeddings = self.embedding(input_ids)  # [B, T, E]
         # 2. Mean pooling over sequence dimension
@@ -145,27 +143,73 @@ class SeqRouter(nn.Module):
         count = attention_mask.sum(dim=1, keepdim=True) if attention_mask is not None else input_embeddings.size(1)
         pooled = sum_embed / count
 
-        # 3. MLP classifier - return LOGITS, not probs
-        logits = self.fc(pooled.to(torch.float32)).squeeze(-1)  # [B, 1]
+        return self.fc(pooled.to(torch.float))  # [B, 18]
 
-        # 4. Sigmoid for probabilities (separate for inference)
-        probs = torch.sigmoid(logits).squeeze(-1)  # [B]
+    def get_data(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
+        outputs = self.forward(input_ids, attention_mask)  # [B, 18]
+        # Denormalize to get real values
+        denormalized = outputs * (SeqRouterDataset.STD.to(outputs.device) + 1e-8) + SeqRouterDataset.MEAN.to(outputs.device)
+        dict = {
+            "Mach" : denormalized[:, 0],
+            "CL" : denormalized[:, 1:7],
+            "weights" : denormalized[:, 7:13],
+            "CM_lower_bound" : denormalized[:, 13],
+            "Trailing_edge_angle_lower_bound" : denormalized[:, 14],
+            "Leading_edge_angle" : denormalized[:, 15],
+            "thickness_head_lower_bound" : denormalized[:, 16],
+            "thickness_tail_lower_bound" : denormalized[:, 17]
+        }
+        return dict
 
-        # Return logits for loss computation
-        return logits, probs
+NORM_PATH = "./data/2com/normalization_params.json"
 
-    def predict(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
-        """Get binary predictions."""
-        _, probs = self.forward(input_ids, attention_mask)  # [B]
-        return (probs > 0.5)
+
+def _load_normalization_params() -> Tuple[torch.Tensor, torch.Tensor]:
+    """Load MEAN and STD from normalization_params.json."""
+    with open(NORM_PATH, "r") as f:
+        p = json.load(f)
+
+    def vec(key: str) -> torch.Tensor:
+        return torch.tensor([p[key]["mean"], p[key]["std"]])
+
+    # Build per-element MEAN and STD arrays
+    # Order: Mach, CL[6], weights[6], CM, TE, LE, th_h, th_t
+    mean_vals = [
+        p["Mach"]["mean"],
+        *[p["CL"]["mean"]] * 6,
+        *[p["weights"]["mean"]] * 6,
+        p["CM_lower_bound"]["mean"],
+        p["Trailing_edge_angle_lower_bound"]["mean"],
+        p["Leading_edge_angle"]["mean"],
+        p["thickness_head_lower_bound"]["mean"],
+        p["thickness_tail_lower_bound"]["mean"],
+    ]
+    std_vals = [
+        p["Mach"]["std"],
+        *[p["CL"]["std"]] * 6,
+        *[p["weights"]["std"]] * 6,
+        p["CM_lower_bound"]["std"],
+        p["Trailing_edge_angle_lower_bound"]["std"],
+        p["Leading_edge_angle"]["std"],
+        p["thickness_head_lower_bound"]["std"],
+        p["thickness_tail_lower_bound"]["std"],
+    ]
+    return torch.tensor(mean_vals), torch.tensor(std_vals)
+
+
+_MEAN, _STD = _load_normalization_params()
+
 
 class SeqRouterDataset(data.Dataset):
     """Custom Dataset for SeqRouter training.
 
     Expects data in JSONL format with fields:
-        - "text" : original response text
-        - "label": int (0 or 1)
+        - "prompt" : input text
+        - "data"   : dict with Mach, CL, weights, CM_lower_bound, ...
     """
+
+    MEAN: torch.Tensor = _MEAN
+    STD: torch.Tensor = _STD
 
     def __init__(self, data_path: str, tokenizer):
         """Initialize dataset.
@@ -185,11 +229,23 @@ class SeqRouterDataset(data.Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        input = self.tokenizer(sample['text'], return_tensors="pt", truncation=True, padding='max_length', max_length=512)
+        input = self.tokenizer(sample['prompt'], return_tensors="pt", truncation=True, padding='max_length', max_length=512)
         input_ids = input['input_ids'].squeeze(0)  # [T]
         attention_mask = input['attention_mask'].squeeze(0)  # [T]
-        label = torch.tensor(sample['label'], dtype=torch.float)  # BCE loss expects float
-        return input_ids, attention_mask, label
+        data_dict = sample['data']
+        data_tensor = torch.tensor([
+            data_dict["Mach"],
+            *data_dict["CL"],
+            *data_dict["weights"],
+            data_dict["CM_lower_bound"],
+            data_dict["Trailing_edge_angle_lower_bound"],
+            data_dict["Leading_edge_angle"],
+            data_dict["thickness_head_lower_bound"],
+            data_dict["thickness_tail_lower_bound"]
+        ], dtype=torch.float)  # [18]
+        # Normalize to handle multi-scale targets
+        normalized = (data_tensor - self.MEAN) / (self.STD + 1e-8)
+        return input_ids, attention_mask, normalized
 
 def train_router(
     model: SeqRouter,
@@ -197,11 +253,10 @@ def train_router(
     save_path: str = "SAVE_DIR",
     train_data_path: str = "TRAIN_DATA",
     test_data_path: str = "TEST_DATA",
-    epochs: int = 10,
+    epochs: int = 1000,
     batch_size: int = 32,
     lr: float = 1e-3,
     num_workers: int = 4,
-    pos_weight: float = 1.0,  # Weight for positive class in BCE loss
 ) -> dict:
     """Train the SeqRouter model.
 
@@ -221,69 +276,80 @@ def train_router(
     """
     dataset = SeqRouterDataset(train_data_path, tokenizer)
     dataloader = data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    criterion = nn.MSELoss()  # Using MSELoss for regression targets (Mach, CL, weights, etc.)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
     avg_loss = 0.0
+    loss_history = []
     model.train()
     for epoch in range(epochs):
         start_time = time.time()
         total_loss = 0.0
         for input_ids, attention_mask, labels in dataloader:
             optimizer.zero_grad()
-            logits, _ = model(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B], get logits for loss
-            loss = criterion(logits, labels.to(DEVICE))
+            result = model(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B, 18]
+            loss = criterion(result, labels.to(DEVICE))  # Compute loss
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * input_ids.size(0)
+        scheduler.step(total_loss / len(dataset))
         last_loss = avg_loss
         avg_loss = total_loss / len(dataset)
+        loss_history.append(last_loss)
+        if(epoch % 100 == 0):
+            torch.save(model.state_dict(), save_path)  # Save checkpoint every 100 epochs
         end_time = time.time()
         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}, Time: {end_time - start_time:.2f}s")
-        if(abs(avg_loss - last_loss) < 1e-6):
-            print("Early stopping due to minimal loss improvement.")
-            break
+        # if(abs(avg_loss - last_loss) < 1e-6):
+        #     print("Early stopping due to minimal loss improvement.")
+        #     break
     torch.save(model.state_dict(), save_path)
+    import matplotlib.pyplot as plt
+    plt.plot(loss_history)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training Loss History")
+    plt.savefig(f"training_loss_t2c.png", dpi=300)
 
     test_dataset = SeqRouterDataset(test_data_path, tokenizer)
     test_dataloader = data.DataLoader(test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     model.eval()
-    correct, total = 0, 0
+    criterion = nn.MSELoss()
+    loss = 0.0
     with torch.no_grad():
-        for input_ids, attention_mask, labels in test_dataloader:
-            predictions = model.predict(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B]
-            correct += (predictions == labels.bool().to(DEVICE)).sum().item()
-            total += labels.size(0)
-    accuracy = correct / total if total > 0 else 0.0
-    print(f"Test Accuracy: {accuracy:.4f}")
-    return {"train_loss": avg_loss, "test_accuracy": accuracy}
+        for input_ids, attention_mask, data_tensor in test_dataloader:
+            result = model(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B, 18]
+            loss += criterion(result, data_tensor.to(DEVICE)).item() * input_ids.size(0)
+    avg_test_loss = loss / len(test_dataset)
+    print(f"Test Loss: {avg_test_loss:.4f}")
+    return {"train_loss": avg_loss, "test_loss": avg_test_loss}
 
-def evaluate_router(model: SeqRouter, tokenizer: AutoTokenizer, test_data_path: str) -> dict:
+def evaluate_router(model: SeqRouter, tokenizer: AutoTokenizer, test_data_path: str = "TEST_DATA", batch_size: int = 32, num_workers: int = 4) -> dict:
     """Evaluate the SeqRouter model on test data.
 
     Args:
         model: Trained SeqRouter model
         tokenizer: Tokenizer for processing text
         test_data_path: Path to test data (jsonl format)
+        batch_size: Batch size for evaluation
+        num_workers: Number of workers for DataLoader
 
     Returns:
-        Dictionary with evaluation metrics (e.g., accuracy)
+        Dictionary with evaluation metrics
     """
     test_dataset = SeqRouterDataset(test_data_path, tokenizer)
-    test_dataloader = data.DataLoader(test_dataset, batch_size=32, num_workers=4, pin_memory=True)
+    test_dataloader = data.DataLoader(test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     model.eval()
-    correct, total = 0, 0
+    criterion = nn.MSELoss()
+    loss = 0.0
     with torch.no_grad():
-        start_time = time.time()
-        for input_ids, attention_mask, labels in test_dataloader:
-            predictions = model.predict(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B]
-            correct += (predictions == labels.bool().to(DEVICE)).sum().item()
-            total += labels.size(0)
-        end_time = time.time()
-    accuracy = correct / total if total > 0 else 0.0
-    print(f"Test Accuracy: {accuracy:.4f}")
-    print(f"Evaluation Time per Sample: {(end_time - start_time) / total:.4f}s")
-    return {"test_accuracy": accuracy}
-
+        for input_ids, attention_mask, data_tensor in test_dataloader:
+            result = model(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B, 18]
+            loss += criterion(result, data_tensor.to(DEVICE)).item() * input_ids.size(0)
+            print(result.cpu().numpy(), data_tensor.cpu().numpy())  # Debug: print predictions vs labels
+    avg_test_loss = loss / len(test_dataset)
+    print(f"Test Loss: {avg_test_loss:.4f}")
+    return {"test_loss": avg_test_loss}
 
 if __name__ == "__main__":
     # Quick test with random inputs
@@ -300,19 +366,20 @@ if __name__ == "__main__":
     else:
         print(f"No checkpoint found at {SAVE_DIR}, using random initialized model.")
 
-    # train_router(
-    #     model=model,
-    #     tokenizer=tokenizer,
-    #     save_path=SAVE_DIR,
-    #     train_data_path=TRAIN_DATA,
-    #     test_data_path=TEST_DATA,
-    #     epochs=200,  # Adjust epochs as needed
-    #     batch_size=256,  # Adjust batch size as needed
-    #     lr=1e-5,  # Adjust learning rate as needed
-    #     num_workers=16,
-    #     pos_weight=1.0  # Adjust pos_weight based on class imbalance
-    # )
-    # print(f"Training completed and model saved in {SAVE_DIR}")
+    train_router(
+        model=model,
+        tokenizer=tokenizer,
+        save_path=SAVE_DIR,
+        train_data_path=TRAIN_DATA,
+        test_data_path=TEST_DATA,
+        epochs=1000,  # Adjust epochs as needed
+        batch_size=32,  # Adjust batch size as needed
+        lr=1e-4,  # Adjust learning rate as needed
+        num_workers=2,
+    )
+    print(f"Training completed and model saved in {SAVE_DIR}")
+
+    # eval_metrics = evaluate_router(model, tokenizer, test_data_path=TEST_DATA)
+    # print(f"Evaluation Metrics: {eval_metrics}")
 
     # Evaluate on test set
-    evaluate_router(model, tokenizer, TEST_DATA)
