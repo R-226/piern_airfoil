@@ -12,9 +12,8 @@ build/
 __pycache__/
 *.pyc
 
-# Transolver weights (large binary)
-Transolver/Transolver
-Transolver/
+# test
+tests/
 
 # Lock files
 uv.lock

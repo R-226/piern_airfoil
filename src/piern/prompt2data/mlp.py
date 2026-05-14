@@ -1,51 +1,37 @@
 """
-Seq-Level Router for PiERN Airfoil.
+Prompt-to-Data Regression Router (Embedding Variant) for PiERN Airfoil.
 
-This module implements a sequence-level router that learns to predict
-the trigger boundary where LLM should switch from reasoning/explaining
-to outputting actual results (e.g., airfoil coordinates).
+This module implements a regression model that predicts aerodynamic parameters
+(Mach, CL, weights, CM, etc.) from natural language prompts. Unlike the
+hidden-state variant (mlp_hidden.py), this model uses the base model's
+embedding layer directly and trains the MLP on top of mean-pooled embeddings.
 
-Architecture Reference:
-    LMClassifier1D from capacity_sample_PiERN.py (lines 34-49)
-
-Key Differences from Reference:
-    - Reference uses hidden_dim=128, we may need to tune
-    - Reference uses embed_dim=1536 (Qwen2.5-0.5B), we need flexible vocab_size
-    - Reference is binary classification, we are binary classification (same)
-
-Data Flow:
+Architecture:
     Input:  token_ids [B, T] + attention_mask [B, T]
             ↓
-    Embed: embedding layer [B, T, E]
+    Embed: frozen embedding layer [B, T, E]
             ↓
-    Mask:  apply attention_mask [B, T, E]
+    Mask + Mean Pool: [B, E]
             ↓
-    Pool:  mean pooling [B, E]
+    MLP:   6-layer MLP [B, 18]
             ↓
-    MLP:   5-layer MLP [B, 1]
-            ↓
-    Output: logits [B, 1] → sigmoid → binary decision
+    Output: normalized predictions → denormalize to real values
 
 Training:
-    - Labels: type=1 (trigger boundary) or type=0 (not trigger)
-    - Loss: BCEWithLogitsLoss with pos_weight for imbalance
+    - Labels: 18-dim normalized aerodynamic parameters
+    - Loss: MSELoss
     - Optimizer: AdamW
+    - Scheduler: CosineAnnealingLR (lr decays from initial to 1% over all epochs)
 
-Trigger Detection:
-    The router learns to detect the semantic boundary where:
-        - "推理结束标志" + "：" (reasoning ending + colon) = type=1
-        - Everything else = type=0
-
-    Examples:
-        "分析完成，准备输出结果：" → type=1 (trigger!)
-        "分析完成，准备输出结果"   → type=0 (still reasoning)
-        "根据伯努利原理：气流..." → type=0 (explanation with colon, not trigger)
+Predicted Parameters (18-dim):
+    - Mach (1), CL (6), weights (6), CM_lower_bound (1),
+      Trailing_edge_angle_lower_bound (1), Leading_edge_angle (1),
+      thickness_head_lower_bound (1), thickness_tail_lower_bound (1)
 """
 
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data as data
 import json
@@ -57,7 +43,7 @@ from transformers import AutoTokenizer, AutoModel
 
 MODEL_PATH = "./model/Qwen3.5-0.8B"  # Path to base model for embeddings (adjust as needed)
 
-SAVE_DIR = "./checkpoint/t2c/seq_t2c_hidden.pt"
+SAVE_DIR = "./checkpoint/t2c/seq_t2c.pt"
 TRAIN_DATA = "./data/2com/train_data.jsonl"
 TEST_DATA = "./data/2com/test_data.jsonl"
 
@@ -66,89 +52,74 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class SeqRouter(nn.Module):
-    """Sequence-level Router for PiERN Airfoil.
+    """MLP regression head that maps mean-pooled LLM embeddings to aerodynamic parameters.
 
-    This router takes token sequences and predicts whether the current
-    position is a trigger boundary (where Expert should be invoked).
-
-    Architecture:
-        1. Token Embedding Layer
-        2. Attention Mask Application
-        3. Mean Pooling
-        4. 5-layer MLP → logits
-
-    Input:
-        - input_ids: [batch_size, seq_len] token IDs
-        - attention_mask: [batch_size, seq_len] binary mask
-
-    Output:
+    Input:  token_ids [B, T] + attention_mask [B, T]
+    Output: [B, 18] normalized predictions (denormalize via get_data)
     """
 
     def __init__(
         self,
         base_model,
         embed_dim: int,
-        hidden_dim1: int,
-        hidden_dim2: int,
-        hidden_dim3: int,
-        hidden_dim4: int,
-        hidden_dim5: int,
+        hidden_dim1: int = 256,
+        hidden_dim2: int = 128,
+        hidden_dim3: int = 64,
+        hidden_dim4: int = 32,
+        dropout: float = 0.3,
     ):
         """Initialize SeqRouter.
 
         Args:
-            vocab_size: Size of vocabulary (from tokenizer)
-            embed_dim: Embedding dimension. 
-            hidden_dim1: First hidden dimension for the MLP layer.
-            hidden_dim2: Second hidden dimension for the MLP layer.
+            base_model: LLM whose embedding layer is reused (frozen).
+            embed_dim: Embedding dimension from base model.
+            hidden_dim1-4: Hidden dimensions for the MLP layers.
+            dropout: Dropout probability (0 = no dropout).
         """
         super().__init__()
-        self.model = base_model
-        # MLP classifier
-        # Input: embedding dimension
-        # Hidden: hidden_dim
-        # Output: 1 (binary classification)
+        self.embedding = base_model.get_input_embeddings()
+        self.embedding.requires_grad_(False)
+        # MLP regressor: embed_dim → 18-dim output
         self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim1),
+            nn.Linear(embed_dim, hidden_dim1),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim1, hidden_dim2),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim2, hidden_dim3),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim3, hidden_dim4),
             nn.ReLU(),
-            nn.Linear(hidden_dim4, hidden_dim5),
-            nn.ReLU(),
-            nn.Linear(hidden_dim5, 18)  # Output logits for binary classification
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim4, 18),
         )
 
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             input_ids: [B, T] token IDs
             attention_mask: [B, T] binary mask (optional)
         Returns:
-            Tuple of (logits, probs) where each is [B, 18]
+            predictions: [B, 18] normalized predictions
         """
-        input_hidden = self.model(input_ids, attention_mask=attention_mask).last_hidden_state  # [B, T, E]
-        # 2. Mean pooling over sequence dimension
-        # Sum over sequence: [B, T, E] → [B, E]
-        sum_embed = input_hidden.sum(dim=1)
-        count = attention_mask.sum(dim=1, keepdim=True) if attention_mask is not None else input_hidden.size(1)
+        input_embeddings = self.embedding(input_ids)  # [B, T, E]
+        sum_embed = input_embeddings.sum(dim=1)
+        count = attention_mask.sum(dim=1, keepdim=True) if attention_mask is not None else input_embeddings.size(1)
         pooled = sum_embed / count
-
         return self.fc(pooled.to(torch.float))  # [B, 18]
 
-    def get_data(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
+    def get_data(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> dict:
+        """Forward pass + denormalize to real aerodynamic parameter values."""
         outputs = self.forward(input_ids, attention_mask)  # [B, 18]
-        # Denormalize to get real values
         denormalized = outputs * (SeqRouterDataset.STD.to(outputs.device) + 1e-8) + SeqRouterDataset.MEAN.to(outputs.device)
-        dict = {
+        return {
             "Mach" : denormalized[:, 0],
             "CL" : denormalized[:, 1:7],
             "weights" : denormalized[:, 7:13],
@@ -158,7 +129,6 @@ class SeqRouter(nn.Module):
             "thickness_head_lower_bound" : denormalized[:, 16],
             "thickness_tail_lower_bound" : denormalized[:, 17]
         }
-        return dict
 
 NORM_PATH = "./data/2com/normalization_params.json"
 
@@ -167,9 +137,6 @@ def _load_normalization_params() -> Tuple[torch.Tensor, torch.Tensor]:
     """Load MEAN and STD from normalization_params.json."""
     with open(NORM_PATH, "r") as f:
         p = json.load(f)
-
-    def vec(key: str) -> torch.Tensor:
-        return torch.tensor([p[key]["mean"], p[key]["std"]])
 
     # Build per-element MEAN and STD arrays
     # Order: Mach, CL[6], weights[6], CM, TE, LE, th_h, th_t
@@ -228,9 +195,9 @@ class SeqRouterDataset(data.Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        input = self.tokenizer(sample['prompt'], return_tensors="pt", truncation=True, padding='max_length', max_length=512)
-        input_ids = input['input_ids'].squeeze(0)  # [T]
-        attention_mask = input['attention_mask'].squeeze(0)  # [T]
+        encoded = self.tokenizer(sample['prompt'], return_tensors="pt", truncation=True, padding='max_length', max_length=512)
+        input_ids = encoded['input_ids'].squeeze(0)  # [T]
+        attention_mask = encoded['attention_mask'].squeeze(0)  # [T]
         data_dict = sample['data']
         data_tensor = torch.tensor([
             data_dict["Mach"],
@@ -248,10 +215,11 @@ class SeqRouterDataset(data.Dataset):
 
 def train_router(
     model: SeqRouter,
+    base_model,
     tokenizer: AutoTokenizer,
-    save_path: str = "SAVE_DIR",
-    train_data_path: str = "TRAIN_DATA",
-    test_data_path: str = "TEST_DATA",
+    save_path: str = SAVE_DIR,
+    train_data_path: str = TRAIN_DATA,
+    test_data_path: str = TEST_DATA,
     epochs: int = 1000,
     batch_size: int = 32,
     lr: float = 1e-3,
@@ -261,6 +229,7 @@ def train_router(
 
     Args:
         model: SeqRouter model to train
+        base_model: LLM used for embedding extraction (frozen during training)
         tokenizer: Tokenizer for processing text
         save_path: Path to save the trained model checkpoint
         train_data_path: Path to training data (jsonl format)
@@ -268,16 +237,20 @@ def train_router(
         epochs: Number of training epochs
         batch_size: Batch size for training
         lr: Learning rate
-        pos_weight: Weight for positive class (type=1). >1.0 if more negatives than positives.
+        num_workers: Number of DataLoader workers
 
     Returns:
-        Dictionary with training metrics
+        Dictionary with training metrics (train_loss, test_loss)
     """
+    base_model.eval()
+    for parameter in base_model.parameters():
+        parameter.requires_grad_(False)
+
     dataset = SeqRouterDataset(train_data_path, tokenizer)
     dataloader = data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    criterion = nn.MSELoss()  # Using MSELoss for regression targets (Mach, CL, weights, etc.)
+    criterion = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.01)
     avg_loss = 0.0
     loss_history = []
     model.train()
@@ -291,10 +264,9 @@ def train_router(
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * input_ids.size(0)
-        scheduler.step(total_loss / len(dataset))
-        last_loss = avg_loss
         avg_loss = total_loss / len(dataset)
-        loss_history.append(last_loss)
+        scheduler.step()
+        loss_history.append(avg_loss)
         if(epoch % 100 == 0):
             torch.save(model.state_dict(), save_path)  # Save checkpoint every 100 epochs
         end_time = time.time()
@@ -323,11 +295,12 @@ def train_router(
     print(f"Test Loss: {avg_test_loss:.4f}")
     return {"train_loss": avg_loss, "test_loss": avg_test_loss}
 
-def evaluate_router(model: SeqRouter, tokenizer: AutoTokenizer, test_data_path: str = "TEST_DATA", batch_size: int = 32, num_workers: int = 4) -> dict:
+def evaluate_router(model: SeqRouter, base_model, tokenizer: AutoTokenizer, test_data_path: str = TEST_DATA, batch_size: int = 32, num_workers: int = 4) -> dict:
     """Evaluate the SeqRouter model on test data.
 
     Args:
         model: Trained SeqRouter model
+        base_model: Base model for feature extraction
         tokenizer: Tokenizer for processing text
         test_data_path: Path to test data (jsonl format)
         batch_size: Batch size for evaluation
@@ -341,48 +314,55 @@ def evaluate_router(model: SeqRouter, tokenizer: AutoTokenizer, test_data_path: 
     model.eval()
     criterion = nn.MSELoss()
     loss = 0.0
+    total_samples = len(test_dataset)
+    total_time = 0.0
     with torch.no_grad():
         for input_ids, attention_mask, data_tensor in test_dataloader:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            t0 = time.time()
             result = model(input_ids.to(DEVICE), attention_mask.to(DEVICE))  # [B, 18]
-            loss += criterion(result, data_tensor.to(DEVICE)).item() * input_ids.size(0)
-            print(result.cpu().numpy(), data_tensor.cpu().numpy())  # Debug: print predictions vs labels
-    avg_test_loss = loss / len(test_dataset)
-    print(f"Test Loss: {avg_test_loss:.4f}")
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            t1 = time.time()
+            batch_time = t1 - t0
+            current_batch_size = input_ids.size(0)
+            total_time += batch_time
+            loss += criterion(result, data_tensor.to(DEVICE)).item() * current_batch_size
+    avg_test_loss = loss / total_samples if total_samples > 0 else float('nan')
+    time_per_sample = total_time / total_samples if total_samples > 0 else float('nan')
+    print(f"Test Loss: {avg_test_loss:.4f}, Time_per_sample: {time_per_sample:.4f}s")
     return {"test_loss": avg_test_loss}
 
 if __name__ == "__main__":
-    # Quick test with random inputs
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     base_model = AutoModel.from_pretrained(MODEL_PATH).to(DEVICE)
     embedding_dim = base_model.get_input_embeddings().embedding_dim
 
-    # model = SeqRouter(base_model, embed_dim=embedding_dim, hidden_dim1=512, hidden_dim2=256, hidden_dim3=128, hidden_dim4=64, hidden_dim5=32).to(DEVICE)
+    model = SeqRouter(base_model, embed_dim=embedding_dim, dropout=0.3).to(DEVICE)
 
-    # if os.path.exists(SAVE_DIR):
-    #     model.load_state_dict(torch.load(SAVE_DIR))
-    #     print(f"Loaded model from {SAVE_DIR}")
-    # else:
-    #     print(f"No checkpoint found at {SAVE_DIR}, using random initialized model.")
-
-    input_ids = torch.randint(0, tokenizer.vocab_size, (4, 512)).to(DEVICE)  # [B, T]
-    last_hidden_dim = base_model(input_ids).last_hidden_state.shape[-1]
-    print(f"Base model last hidden dimension: {last_hidden_dim}")
+    if os.path.exists(SAVE_DIR):
+        model.load_state_dict(torch.load(SAVE_DIR, map_location=DEVICE))
+        print(f"Loaded model from {SAVE_DIR}")
+    else:
+        print(f"No checkpoint found at {SAVE_DIR}, using random initialized model.")
 
     train_router(
         model=model,
+        base_model=base_model,
         tokenizer=tokenizer,
         save_path=SAVE_DIR,
         train_data_path=TRAIN_DATA,
         test_data_path=TEST_DATA,
-        epochs=1000,  # Adjust epochs as needed
+        epochs=500,  # Adjust epochs as needed
         batch_size=32,  # Adjust batch size as needed
         lr=1e-4,  # Adjust learning rate as needed
         num_workers=2,
     )
     print(f"Training completed and model saved in {SAVE_DIR}")
 
-    # eval_metrics = evaluate_router(model, tokenizer, test_data_path=TEST_DATA)
-    # print(f"Evaluation Metrics: {eval_metrics}")
+    eval_metrics = evaluate_router(model, base_model, tokenizer, test_data_path=TEST_DATA)
+    print(f"Evaluation Metrics: {eval_metrics}")
 
     # Evaluate on test set

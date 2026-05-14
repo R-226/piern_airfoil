@@ -224,6 +224,7 @@ def train_router(
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     avg_loss = 0.0
+    loss_history = []
     model.train()
     for epoch in range(epochs):
         start_time = time.time()
@@ -237,12 +238,21 @@ def train_router(
             total_loss += loss.item() * input_ids.size(0)
         last_loss = avg_loss
         avg_loss = total_loss / len(dataset)
+        loss_history.append(avg_loss)
         end_time = time.time()
         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}, Time: {end_time - start_time:.2f}s")
         if(abs(avg_loss - last_loss) < 1e-6):
             print("Early stopping due to minimal loss improvement.")
             break
     torch.save(model.state_dict(), save_path)
+
+    import matplotlib.pyplot as plt
+    plt.plot(loss_history)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("SeqRouter Training Loss")
+    plt.savefig(f"router_v0_loss.png")
+    plt.close()
 
     test_dataset = SeqRouterDataset(test_data_path, tokenizer)
     test_dataloader = data.DataLoader(test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
