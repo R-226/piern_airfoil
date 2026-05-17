@@ -84,8 +84,11 @@ def eval_airfoil_multipoint(airfoil, cl_targets=CL_TARGETS, re_arr=RE, mach=MACH
     )
 
 
-def weighted_cd(CDs, weights=CL_WEIGHTS):
+def weighted_cd(CDs, weights=None):
     """计算加权CD（忽略NaN）。"""
+    if weights is None:
+        weights = CL_WEIGHTS[:len(CDs)]
+    weights = np.asarray(weights)
     mask = ~np.isnan(CDs)
     if not mask.any():
         return np.inf
