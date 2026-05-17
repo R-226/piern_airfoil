@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
-from scipy.optimize import differential_evolution, OptimizeResult
+from scipy.optimize import brentq, differential_evolution, OptimizeResult
 
 from .constraints import AirfoilConstraints, FidelityLevel
 
@@ -93,7 +93,7 @@ class GlobalAirfoilOptimizer:
         airfoil: "asb.KulfanAirfoil",
         constraints: AirfoilConstraints,
         alpha: float = 5.0,
-        Re: float = 500e3,
+        Re: float | np.ndarray = 500e3,
         mach: float = 0.03,
         fidelity: FidelityLevel = FidelityLevel.THIN,
         objective_fn: Optional[Callable[["asb.KulfanAirfoil", dict], float]] = None,
@@ -106,11 +106,15 @@ class GlobalAirfoilOptimizer:
         reconstructs a KulfanAirfoil from the design vector, evaluates
         aerodynamics at the specified fidelity, and applies constraint penalties.
 
+        When CL_targets are provided in constraints, performs multi-point
+        evaluation: for each CL target, searches for the alpha that achieves it
+        via Brent's method, then computes weighted CD across all operating points.
+
         Args:
             airfoil: Template airfoil for initial weight values.
             constraints: Unified constraint specification.
-            alpha: Angle of attack in degrees.
-            Re: Reynolds number.
+            alpha: Fixed angle of attack (used only when CL_targets is None).
+            Re: Reynolds number(s). Can be scalar or array matching CL_targets.
             mach: Mach number.
             fidelity: THIN (~1ms eval) or NEURAL (~50-200ms eval).
             objective_fn: Custom (airfoil, aero) -> float. Defaults to weighted CD.
@@ -128,21 +132,42 @@ class GlobalAirfoilOptimizer:
             + [(-1.0, 1.0)]  # leading_edge_weight
         )
 
+        # Multi-point brentq only for NEURAL fidelity (THIN stays fast)
+        has_targets = (
+            fidelity == FidelityLevel.NEURAL
+            and constraints.CL_targets is not None
+            and len(constraints.CL_targets) > 0
+        )
+
         if fidelity == FidelityLevel.THIN:
             from .thin_airfoil_solver import thin_airfoil_from_kulfan
 
-            def solve(af: "asb.KulfanAirfoil") -> dict:
-                result = thin_airfoil_from_kulfan(af, alpha=alpha, mach=mach)
+            def solve_at(af: "asb.KulfanAirfoil", a: float) -> dict:
+                result = thin_airfoil_from_kulfan(af, alpha=a, mach=mach)
                 return {"CL": result.CL, "CD": result.CD, "CM": result.CM}
         else:
-            def solve(af: "asb.KulfanAirfoil") -> dict:
-                return af.get_aero_from_neuralfoil(alpha=alpha, Re=Re, mach=mach)
+            def solve_at(af: "asb.KulfanAirfoil", a: float) -> dict:
+                return af.get_aero_from_neuralfoil(alpha=a, Re=Re, mach=mach)
+
+        def _find_alpha_for_cl(af: "asb.KulfanAirfoil", cl_target: float, re: float) -> float | None:
+            """Find alpha that achieves cl_target using Brent's method."""
+            def cl_residual(a):
+                try:
+                    r = solve_at(af, a)
+                    return float(np.asarray(r["CL"]).flatten()[0]) - cl_target
+                except Exception:
+                    return 1e3
+            try:
+                return brentq(cl_residual, -3.0, 20.0, xtol=0.05, maxiter=20)
+            except (ValueError, RuntimeError):
+                return None
 
         default_obj = objective_fn is None
 
         def _objective(x: np.ndarray) -> float:
             try:
-                af = __import__("aerosandbox", fromlist=["KulfanAirfoil"]).KulfanAirfoil(
+                asb_mod = __import__("aerosandbox", fromlist=["KulfanAirfoil"])
+                af = asb_mod.KulfanAirfoil(
                     name="candidate",
                     upper_weights=np.array(x[:n_upper]),
                     lower_weights=np.array(x[n_upper:n_upper + n_lower]),
@@ -150,20 +175,41 @@ class GlobalAirfoilOptimizer:
                     TE_thickness=0.0,
                 )
 
-                aero = solve(af)
+                if has_targets:
+                    # Multi-point: find alpha for each CL target
+                    total_cd = 0.0
+                    total_penalty = 0.0
+                    re_arr = np.atleast_1d(Re)
+                    weights = constraints.CL_weights if constraints.CL_weights is not None else np.ones(len(constraints.CL_targets))
 
-                if default_obj:
-                    cd = float(np.asarray(aero["CD"]).flatten()[0])
-                    if constraints.CL_weights is not None:
-                        weights = np.mean(constraints.CL_weights)
-                    else:
-                        weights = 1.0
-                    base = cd * weights
+                    for i, cl_t in enumerate(constraints.CL_targets):
+                        re_i = float(re_arr[min(i, len(re_arr) - 1)])
+                        a_opt = _find_alpha_for_cl(af, float(cl_t), re_i)
+                        if a_opt is None:
+                            total_penalty += 1e4
+                            continue
+                        aero = solve_at(af, a_opt)
+                        cd = float(np.asarray(aero["CD"]).flatten()[0])
+                        total_cd += cd * float(weights[i])
+                        total_penalty += constraints.penalty(
+                            af, aero, fidelity, CL_target=float(cl_t)
+                        )
+
+                    return total_cd + total_penalty
+
                 else:
-                    base = objective_fn(af, aero)
+                    # Single-point: evaluate at fixed alpha
+                    aero = solve_at(af, alpha)
 
-                penalty = constraints.penalty(af, aero, fidelity, CL_target=None)
-                return base + penalty
+                    if default_obj:
+                        cd = float(np.asarray(aero["CD"]).flatten()[0])
+                        w = float(np.mean(constraints.CL_weights)) if constraints.CL_weights is not None else 1.0
+                        base = cd * w
+                    else:
+                        base = objective_fn(af, aero)
+
+                    penalty = constraints.penalty(af, aero, fidelity, CL_target=None)
+                    return base + penalty
 
             except Exception:
                 return 1e6
