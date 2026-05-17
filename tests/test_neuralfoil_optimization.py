@@ -1,133 +1,135 @@
 """
-Test NeuralFoil optimization integration.
-
-Following the official NeuralFoil tutorial patterns.
+Test NeuralFoil analysis and optimization integration.
 """
 
 import numpy as np
+import aerosandbox as asb
 
 
 class TestNeuralFoilAnalysis:
-    """Test NeuralFoil analysis."""
+    """Test NeuralFoil analysis via aerosandbox."""
 
     def test_analyze_by_name(self):
         """Test analyzing airfoil by name."""
-        from piern_airfoil.neuralfoil import NeuralFoilAnalyzer
+        airfoil = asb.KulfanAirfoil("naca4412")
+        aero = airfoil.get_aero_from_neuralfoil(alpha=5.0, Re=3e6)
 
-        analyzer = NeuralFoilAnalyzer()
-        result = analyzer.analyze("naca4412", alpha=5.0, Re=3e6)
+        CL = float(np.asarray(aero["CL"]).flatten()[0])
+        CD = float(np.asarray(aero["CD"]).flatten()[0])
+        confidence = float(np.asarray(aero["analysis_confidence"]).flatten()[0])
 
-        assert result.cl > 0
-        assert result.cd > 0
-        print(f"  NACA4412 @ 5°: CL={result.cl:.4f}, CD={result.cd:.6f}, confidence={result.analysis_confidence:.3f}")
+        assert CL > 0
+        assert CD > 0
+        assert confidence > 0.9
+        print(f"  NACA4412 @ 5deg: CL={CL:.4f}, CD={CD:.6f}, confidence={confidence:.3f}")
 
     def test_vectorized_analysis(self):
-        """Test vectorized analysis across multiple conditions."""
-        from piern_airfoil.neuralfoil import NeuralFoilAnalyzer
+        """Test analysis across multiple angles of attack."""
+        airfoil = asb.KulfanAirfoil("dae11")
 
-        analyzer = NeuralFoilAnalyzer()
-
-        alphas = [0, 5, 10]
-        for alpha in alphas:
-            result = analyzer.analyze("dae11", alpha=alpha, Re=1e6)
-            print(f"  alpha={alpha}°: CL={result.cl:.4f}, CD={result.cd:.6f}")
+        for alpha in [0, 5, 10]:
+            aero = airfoil.get_aero_from_neuralfoil(alpha=alpha, Re=1e6)
+            CL = float(np.asarray(aero["CL"]).flatten()[0])
+            CD = float(np.asarray(aero["CD"]).flatten()[0])
+            print(f"  alpha={alpha}deg: CL={CL:.4f}, CD={CD:.6f}")
 
 
 class TestNeuralFoilOptimization:
-    """Test NeuralFoil optimization using asb.Opti."""
+    """Test NeuralFoil optimization using NeuralOptimizer."""
 
-    def test_simple_optimization(self):
+    def test_single_point_optimization(self):
         """Test simple drag minimization with CL constraint."""
-        from piern_airfoil.neuralfoil import NeuralFoilOptimizer
+        from piern_airfoil.neuralfoil import NeuralOptimizer
 
-        optimizer = NeuralFoilOptimizer()
-
-        # Optimize: minimize CD subject to CL >= 0.6
-        result = optimizer.optimize(
-            objective="min_cd",
-            constraints=[("cl", ">=", 0.6)],
-            initial_guess="naca0012",
-            alpha_init=5.0,
-            Re=3e6,
+        airfoil = asb.KulfanAirfoil("naca0012")
+        optimizer = NeuralOptimizer(
+            airfoil=airfoil,
+            CL_targets=np.array([0.6]),
+            CL_weights=np.array([1.0]),
+            RE=np.array([3e6]),
+            mach=0.0,
         )
 
-        if result.success:
-            print(f"  Optimized: CL={result.cl:.4f}, CD={result.cd:.6f}, L/D={result.cl_cd:.2f}")
-            print(f"  Alpha: {result.alpha:.2f}°")
-        else:
-            print(f"  Optimization failed: {result.error}")
+        optimizer.update()
 
-    def test_max_lift_to_drag(self):
-        """Test maximum L/D optimization."""
-        from piern_airfoil.neuralfoil import NeuralFoilOptimizer
+        CL = float(np.asarray(optimizer.aero["CL"]).flatten()[0])
+        CD = float(np.asarray(optimizer.aero["CD"]).flatten()[0])
+        print(f"  Optimized: CL={CL:.4f}, CD={CD:.6f}, L/D={CL/CD:.2f}")
 
-        optimizer = NeuralFoilOptimizer()
+        assert CL > 0
+        assert CD > 0
 
-        result = optimizer.optimize(
-            objective="max_cl_cd",
-            initial_guess="naca0012",
-            Re=3e6,
+    def test_constraints_active(self):
+        """Verify thickness constraint is satisfied after optimization."""
+        from piern_airfoil.neuralfoil import NeuralOptimizer
+
+        airfoil = asb.KulfanAirfoil("naca0012")
+        optimizer = NeuralOptimizer(
+            airfoil=airfoil,
+            CL_targets=np.array([1.0]),
+            CL_weights=np.array([1.0]),
+            RE=np.array([500e3]),
+            mach=0.03,
         )
 
-        if result.success:
-            print(f"  Max L/D: CL={result.cl:.4f}, CD={result.cd:.6f}, L/D={result.cl_cd:.2f}")
-        else:
-            print(f"  Optimization failed: {result.error}")
+        optimizer.update()
+
+        thickness_33 = optimizer.airfoil.local_thickness(x_over_c=0.33)
+        thickness_33_val = float(np.asarray(thickness_33).flatten()[0])
+        assert thickness_33_val >= 0.127, f"Thickness at 33% = {thickness_33_val} < 0.127"
+        print(f"  Thickness at 33% chord: {thickness_33_val:.4f}")
 
 
 class TestMultipointOptimization:
-    """Test multi-point optimization (following official tutorial)."""
+    """Test multi-point optimization (HPA case)."""
 
     def test_multipoint_hpa(self):
-        """Test Human-Powered Aircraft optimization from tutorial."""
-        from piern_airfoil.neuralfoil import NeuralFoilOptimizer
+        """Test Human-Powered Aircraft multipoint optimization."""
+        from piern_airfoil.neuralfoil import NeuralOptimizer
 
-        optimizer = NeuralFoilOptimizer()
+        airfoil = asb.KulfanAirfoil("naca0012")
+        CL_targets = np.array([0.8, 1.0, 1.2, 1.4, 1.5, 1.6])
+        CL_weights = np.array([5, 6, 7, 8, 9, 10])
+        Re = 500e3 * (CL_targets / 1.25) ** -0.5
 
-        # Follow the tutorial: multipoint optimization
-        CL_multipoint_targets = np.array([0.8, 1.0, 1.2, 1.4, 1.5, 1.6])
-        CL_multipoint_weights = np.array([5, 6, 7, 8, 9, 10])
-        Re = 500e3 * (CL_multipoint_targets / 1.25) ** -0.5
-
-        result = optimizer.multipoint_optimize(
-            cl_targets=CL_multipoint_targets,
-            Re_values=Re,
-            cl_weights=CL_multipoint_weights,
+        optimizer = NeuralOptimizer(
+            airfoil=airfoil,
+            CL_targets=CL_targets,
+            CL_weights=CL_weights,
+            RE=Re,
             mach=0.03,
-            constraints=[
-                ("cm", ">=", -0.133),
-            ],
-            initial_guess="naca0012",
         )
 
-        if result["success"]:
-            print(f"  Multipoint optimization successful!")
-            print(f"  Alpha: {result['alpha']:.2f}°")
-            for i, (cl, cd, conf) in enumerate(zip(result['CL'], result['CD'], result['confidence'])):
-                print(f"    Point {i+1}: CL={cl:.4f}, CD={cd:.6f}, conf={conf:.3f}")
-        else:
-            print(f"  Optimization failed: {result.get('error', 'Unknown error')}")
+        optimizer.update()
+
+        CL_vals = np.asarray(optimizer.aero["CL"]).flatten()
+        CD_vals = np.asarray(optimizer.aero["CD"]).flatten()
+
+        for i, (cl, cd) in enumerate(zip(CL_vals, CD_vals)):
+            print(f"  Point {i+1}: CL={cl:.4f}, CD={cd:.6f}")
+
+        assert len(CL_vals) == 6
+        assert all(cl > 0 for cl in CL_vals)
 
 
 if __name__ == "__main__":
     print("=" * 60)
     print("NeuralFoil Optimization Test Suite")
-    print("(Following Official Tutorial Patterns)")
     print("=" * 60)
 
     print("\n[1] Testing NeuralFoil Analysis...")
-    test1 = TestNeuralFoilAnalysis()
-    test1.test_analyze_by_name()
-    test1.test_vectorized_analysis()
+    t1 = TestNeuralFoilAnalysis()
+    t1.test_analyze_by_name()
+    t1.test_vectorized_analysis()
 
     print("\n[2] Testing Single-Point Optimization...")
-    test2 = TestNeuralFoilOptimization()
-    test2.test_simple_optimization()
-    test2.test_max_lift_to_drag()
+    t2 = TestNeuralFoilOptimization()
+    t2.test_single_point_optimization()
+    t2.test_constraints_active()
 
     print("\n[3] Testing Multi-Point Optimization...")
-    test3 = TestMultipointOptimization()
-    test3.test_multipoint_hpa()
+    t3 = TestMultipointOptimization()
+    t3.test_multipoint_hpa()
 
     print("\n" + "=" * 60)
     print("All tests completed!")

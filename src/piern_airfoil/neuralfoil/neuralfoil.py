@@ -1,34 +1,12 @@
-from dataclasses import dataclass
+from __future__ import annotations
+
 from typing import Optional
 import aerosandbox.numpy as np
-import aerosandbox.tools.pretty_plots as p
 import aerosandbox as asb
 
 
-@dataclass
-class AnalysisResult:
-    """Result from low-fidelity airfoil analysis."""
-    CL: float
-    CD: float
-    CM: float
-    confidence: float
-    CL_func: Optional[any] = None  # for aero.derivative
-
-
-@dataclass
-class AirfoilGeometry:
-    """Airfoil geometry parameters."""
-    upper_weights: np.ndarray
-    lower_weights: np.ndarray
-    leading_edge_weight: float
-    te_thickness: float = 0.0
-
-'''
-Low-fidelity airfoil optimization using Aerosandbox's KulfanAirfoil and Opti framework.
-'''
-
-class HighFidelityOptimizer():
-    def __init__(self, airfoil: asb.KulfanAirfoil, CL_targets: np.array[float], CL_weights: np.array[float], TE_thickness: float = 0.0, alpha: Optional[asb.OptiVariable] = None, RE: Optional[asb.OptiVariable] = None, mach: Optional[asb.OptiVariable] = None, aoa_low_bound: float = -5, aoa_high_bound: float = 18):
+class NeuralOptimizer:
+    def __init__(self, airfoil: asb.KulfanAirfoil, CL_targets: np.ndarray, CL_weights: np.ndarray, TE_thickness: float = 0.0, alpha: Optional[asb.OptiVariable] = None, RE: Optional[asb.OptiVariable] = None, mach: Optional[asb.OptiVariable] = None, aoa_low_bound: float = -5, aoa_high_bound: float = 18):
         self.airfoil = airfoil
         self.CL_targets = CL_targets
         self.CL_weights = CL_weights
@@ -128,11 +106,11 @@ if __name__ == "__main__":
     CL_multipoint_weights = np.array([5, 6, 7, 8, 9, 10])
     Re = 500e3 * (CL_multipoint_targets / 1.25) ** -0.5
     mach = 0.03
-    High_optimizer = HighFidelityOptimizer(airfoil=airfoil, CL_targets=CL_multipoint_targets, CL_weights=CL_multipoint_weights, RE=Re, mach=mach)
-    
+    optimizer = NeuralOptimizer(airfoil=airfoil, CL_targets=CL_multipoint_targets, CL_weights=CL_multipoint_weights, RE=Re, mach=mach)
+
     import matplotlib.pyplot as plt
 
-    High_optimizer.update()
+    optimizer.update()
     fig, ax = plt.subplots(figsize=(6, 2))
-    High_optimizer.airfoil.draw()
-    plt.savefig(f"test.png", dpi=300)
+    optimizer.airfoil.draw()
+    plt.savefig("test.png", dpi=300)

@@ -1,20 +1,21 @@
 """
-Optimization module for global airfoil shape optimization.
-
-Uses differential evolution (genetic algorithm) to find globally
-optimal airfoil shapes, avoiding local optima that plague gradient-based
-methods like IPOPT.
-
-Also includes thin airfoil theory for rapid approximate analysis.
+Thin airfoil module: fast approximate analysis + global optimization + multi-fidelity workflow.
 """
 
+from .constraints import AirfoilConstraints, FidelityLevel
 from .global_optimizer import GlobalAirfoilOptimizer, OptimizerConfig, OptimizationResult
-from .thin_airfoil_solver import thin_airfoil_analysis, ThinAirfoilResult
+from .multi_fidelity import MultiFidelityResult, multi_fidelity_optimize
+from .thin_airfoil_solver import ThinAirfoilResult, thin_airfoil_analysis, thin_airfoil_from_kulfan
 
 __all__ = [
+    "AirfoilConstraints",
+    "FidelityLevel",
     "GlobalAirfoilOptimizer",
-    "OptimizerConfig",
+    "MultiFidelityResult",
     "OptimizationResult",
-    "thin_airfoil_analysis",
+    "OptimizerConfig",
     "ThinAirfoilResult",
+    "multi_fidelity_optimize",
+    "thin_airfoil_analysis",
+    "thin_airfoil_from_kulfan",
 ]

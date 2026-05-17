@@ -1,20 +1,23 @@
 """
 Global optimization using scipy's differential_evolution (genetic algorithm).
 
-Based on the plan: Use NeuralFoil as the solver + global optimization algorithm.
 Differential evolution is a stochastic global optimization algorithm that:
 - Does not require gradients
 - Handles bound constraints
 - Good at avoiding local optima
-
-Speed: ~1-5 seconds per evaluation (depends on problem complexity)
-Accuracy: Global search capability vs local methods like IPOPT
 """
 
-from dataclasses import dataclass, field
-from typing import Callable, Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
 from scipy.optimize import differential_evolution, OptimizeResult
+
+from .constraints import AirfoilConstraints, FidelityLevel
+
+if TYPE_CHECKING:
+    import aerosandbox as asb
 
 
 @dataclass
@@ -49,11 +52,17 @@ class GlobalAirfoilOptimizer:
     methods like IPOPT.
 
     Example:
+        import aerosandbox as asb
+
         def objective(x):
-            # x = [upper_weights[0:4], lower_weights[0:4], leading_edge_weight]
-            airfoil = rebuild_airfoil(x)
-            result = neuralfoil.analyze(airfoil)
-            return -result.CL / result.CD  # maximize L/D
+            airfoil = asb.KulfanAirfoil(
+                name="candidate",
+                upper_weights=np.array(x[0:8]),
+                lower_weights=np.array(x[8:16]),
+                leading_edge_weight=x[16],
+            )
+            aero = airfoil.get_aero_from_neuralfoil(alpha=5.0, Re=500e3, mach=0.03)
+            return -float(aero["CL"])  # maximize CL
 
         optimizer = GlobalAirfoilOptimizer(objective, bounds=bounds)
         result = optimizer.optimize()
@@ -77,6 +86,89 @@ class GlobalAirfoilOptimizer:
         self.bounds = bounds
         self.config = config or OptimizerConfig()
         self.result: Optional[OptimizeResult] = None
+
+    @classmethod
+    def for_kulfan_airfoil(
+        cls,
+        airfoil: "asb.KulfanAirfoil",
+        constraints: AirfoilConstraints,
+        alpha: float = 5.0,
+        Re: float = 500e3,
+        mach: float = 0.03,
+        fidelity: FidelityLevel = FidelityLevel.THIN,
+        objective_fn: Optional[Callable[["asb.KulfanAirfoil", dict], float]] = None,
+        config: Optional[OptimizerConfig] = None,
+    ) -> "GlobalAirfoilOptimizer":
+        """
+        Create optimizer for KulfanAirfoil shape optimization.
+
+        Automatically derives bounds and builds an objective function that
+        reconstructs a KulfanAirfoil from the design vector, evaluates
+        aerodynamics at the specified fidelity, and applies constraint penalties.
+
+        Args:
+            airfoil: Template airfoil for initial weight values.
+            constraints: Unified constraint specification.
+            alpha: Angle of attack in degrees.
+            Re: Reynolds number.
+            mach: Mach number.
+            fidelity: THIN (~1ms eval) or NEURAL (~50-200ms eval).
+            objective_fn: Custom (airfoil, aero) -> float. Defaults to weighted CD.
+            config: DE optimizer configuration.
+
+        Returns:
+            Configured GlobalAirfoilOptimizer instance.
+        """
+        n_upper = len(airfoil.upper_weights)
+        n_lower = len(airfoil.lower_weights)
+
+        bounds = (
+            [(-0.25, 0.5)] * n_upper
+            + [(-0.5, 0.25)] * n_lower
+            + [(-1.0, 1.0)]  # leading_edge_weight
+        )
+
+        if fidelity == FidelityLevel.THIN:
+            from .thin_airfoil_solver import thin_airfoil_from_kulfan
+
+            def solve(af: "asb.KulfanAirfoil") -> dict:
+                result = thin_airfoil_from_kulfan(af, alpha=alpha, mach=mach)
+                return {"CL": result.CL, "CD": result.CD, "CM": result.CM}
+        else:
+            def solve(af: "asb.KulfanAirfoil") -> dict:
+                return af.get_aero_from_neuralfoil(alpha=alpha, Re=Re, mach=mach)
+
+        default_obj = objective_fn is None
+
+        def _objective(x: np.ndarray) -> float:
+            try:
+                af = __import__("aerosandbox", fromlist=["KulfanAirfoil"]).KulfanAirfoil(
+                    name="candidate",
+                    upper_weights=np.array(x[:n_upper]),
+                    lower_weights=np.array(x[n_upper:n_upper + n_lower]),
+                    leading_edge_weight=float(x[-1]),
+                    TE_thickness=0.0,
+                )
+
+                aero = solve(af)
+
+                if default_obj:
+                    cd = float(np.asarray(aero["CD"]).flatten()[0])
+                    if constraints.CL_weights is not None:
+                        weights = np.mean(constraints.CL_weights)
+                    else:
+                        weights = 1.0
+                    base = cd * weights
+                else:
+                    base = objective_fn(af, aero)
+
+                penalty = constraints.penalty(af, aero, fidelity, CL_target=None)
+                return base + penalty
+
+            except Exception:
+                return 1e6
+
+        return cls(objective=_objective, bounds=bounds, config=config)
 
     def optimize(self) -> OptimizationResult:
         """

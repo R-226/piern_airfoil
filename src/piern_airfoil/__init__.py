@@ -1,36 +1,44 @@
 """
 PIERN-Airfoil: Unified framework for automatic airfoil optimization.
 
-Organized into three main modules:
-- neuralfoil: Fast analysis and optimization using Aerosandbox + NeuralFoil
-- optimization: Global optimization algorithms (CMA-ES, differential evolution)
-- piern: Physics-informed reinforcement learning for intelligent optimization
+Organized into two main modules:
+- neuralfoil: Gradient-based optimization using Aerosandbox + NeuralFoil (NeuralOptimizer)
+- thin_airfoil: Multi-fidelity optimization with thin airfoil theory + global search
 
 Example usage:
-    from piern_airfoil import NeuralFoilOptimizer
+    import aerosandbox as asb
+    from piern_airfoil import NeuralOptimizer
 
-    optimizer = NeuralFoilOptimizer()
-    result = optimizer.optimize(
-        objective="min_cd",
-        constraints=[("cl", ">=", 0.6)],
-        initial_guess="naca0012"
+    airfoil = asb.KulfanAirfoil("naca0012")
+    optimizer = NeuralOptimizer(
+        airfoil=airfoil,
+        CL_targets=[1.0],
+        CL_weights=[1.0],
+        RE=[500e3],
+        mach=0.03,
     )
+    optimizer.update()
 """
 
 __version__ = "0.3.0"
 
-# Optimization module
-from .thin_airfoil import GlobalAirfoilOptimizer, OptimizerConfig
+from .neuralfoil import NeuralOptimizer
+from .thin_airfoil import (
+    AirfoilConstraints,
+    FidelityLevel,
+    GlobalAirfoilOptimizer,
+    OptimizerConfig,
+    multi_fidelity_optimize,
+    thin_airfoil_from_kulfan,
+)
 
 __all__ = [
-    # Version
     "__version__",
-
-    # NeuralFoil
-    "NeuralFoilAnalyzer",
-    "NeuralFoilOptimizer",
-
-    # Global Optimization
+    "NeuralOptimizer",
+    "AirfoilConstraints",
+    "FidelityLevel",
     "GlobalAirfoilOptimizer",
     "OptimizerConfig",
+    "multi_fidelity_optimize",
+    "thin_airfoil_from_kulfan",
 ]

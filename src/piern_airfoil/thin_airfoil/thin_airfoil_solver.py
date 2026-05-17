@@ -150,6 +150,36 @@ def thin_airfoil_analysis(
     )
 
 
+def thin_airfoil_from_kulfan(
+    airfoil,
+    alpha: float = 0.0,
+    mach: float = 0.0,
+    AR: float = 6.0,
+) -> ThinAirfoilResult:
+    """
+    Analyze a KulfanAirfoil using thin airfoil theory.
+
+    Bridge function that converts a KulfanAirfoil into contour coordinates
+    and delegates to thin_airfoil_analysis().
+
+    Args:
+        airfoil: asb.KulfanAirfoil instance
+        alpha: angle of attack in degrees
+        mach: Mach number (for compressibility correction)
+        AR: aspect ratio (used for induced drag calculation)
+
+    Returns:
+        ThinAirfoilResult with CL, CD, CM and surface Cp distributions
+    """
+    upper = airfoil.upper_coordinates()
+    lower = airfoil.lower_coordinates()
+
+    contour_x = np.concatenate([upper[:, 0], lower[:, 0]])
+    contour_y = np.concatenate([upper[:, 1], lower[:, 1]])
+
+    return thin_airfoil_analysis(contour_x, contour_y, alpha=alpha, mach=mach, AR=AR)
+
+
 def compare_with_neuralfoil():
     """Compare thin airfoil theory with NeuralFoil."""
     import sys

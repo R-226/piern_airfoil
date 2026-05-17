@@ -4,6 +4,6 @@ NeuralFoil module - High-fidelity airfoil analysis and optimization.
 Uses Aerosandbox's KulfanAirfoil + Opti framework for symbolic optimization.
 """
 
-from .high_fidelity import LowFidelityOptimizer
+from .neuralfoil import NeuralOptimizer
 
-__all__ = ["LowFidelityOptimizer"]
+__all__ = ["NeuralOptimizer"]
