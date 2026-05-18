@@ -38,6 +38,9 @@ dev = [
     "mypy>=0.950",
     "matplotlib>=3.5",
 ]
+ui = [
+    "gradio>=4.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/example/cc_piern_airfoil"

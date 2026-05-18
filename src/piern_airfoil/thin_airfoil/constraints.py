@@ -111,7 +111,7 @@ class AirfoilConstraints:
         aero: dict,
         fidelity: FidelityLevel,
         CL_target: float | None = None,
-        scale: float = 100.0,
+        scale: float = 10000.0,
     ) -> float:
         """
         Compute total penalty from constraint violations.

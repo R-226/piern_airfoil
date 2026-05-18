@@ -132,18 +132,19 @@ class GlobalAirfoilOptimizer:
             + [(-1.0, 1.0)]  # leading_edge_weight
         )
 
-        # Multi-point brentq only for NEURAL fidelity (THIN stays fast)
         has_targets = (
-            fidelity == FidelityLevel.NEURAL
-            and constraints.CL_targets is not None
+            constraints.CL_targets is not None
             and len(constraints.CL_targets) > 0
         )
+
+        # Scalar Re for thin airfoil (may be array for multi-point NeuralFoil)
+        re_scalar = float(np.atleast_1d(Re)[0])
 
         if fidelity == FidelityLevel.THIN:
             from .thin_airfoil_solver import thin_airfoil_from_kulfan
 
             def solve_at(af: "asb.KulfanAirfoil", a: float) -> dict:
-                result = thin_airfoil_from_kulfan(af, alpha=a, mach=mach)
+                result = thin_airfoil_from_kulfan(af, alpha=a, mach=mach, Re=re_scalar)
                 return {"CL": result.CL, "CD": result.CD, "CM": result.CM}
         else:
             def solve_at(af: "asb.KulfanAirfoil", a: float) -> dict:
@@ -158,7 +159,7 @@ class GlobalAirfoilOptimizer:
                 except Exception:
                     return 1e3
             try:
-                return brentq(cl_residual, -3.0, 20.0, xtol=0.05, maxiter=20)
+                return brentq(cl_residual, -3.0, 20.0, xtol=0.1, maxiter=10)
             except (ValueError, RuntimeError):
                 return None
 
@@ -175,8 +176,8 @@ class GlobalAirfoilOptimizer:
                     TE_thickness=0.0,
                 )
 
-                if has_targets:
-                    # Multi-point: find alpha for each CL target
+                if has_targets and fidelity == FidelityLevel.NEURAL:
+                    # Multi-point: find alpha for each CL target (NEURAL only)
                     total_cd = 0.0
                     total_penalty = 0.0
                     re_arr = np.atleast_1d(Re)
@@ -208,7 +209,8 @@ class GlobalAirfoilOptimizer:
                     else:
                         base = objective_fn(af, aero)
 
-                    penalty = constraints.penalty(af, aero, fidelity, CL_target=None)
+                    cl_t = float(constraints.CL_targets[0]) if constraints.CL_targets is not None else None
+                    penalty = constraints.penalty(af, aero, fidelity, CL_target=cl_t)
                     return base + penalty
 
             except Exception:

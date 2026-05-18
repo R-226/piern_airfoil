@@ -44,7 +44,7 @@ def find_alpha_for_cl(airfoil, cl_target, re, mach, solver="neuralfoil"):
                 aero = airfoil.get_aero_from_neuralfoil(alpha=alpha, Re=re, mach=mach)
                 cl = float(np.asarray(aero["CL"]).flatten()[0])
             else:
-                result = thin_airfoil_from_kulfan(airfoil, alpha=alpha, mach=mach)
+                result = thin_airfoil_from_kulfan(airfoil, alpha=alpha, mach=mach, Re=re)
                 cl = result.CL
             return cl - cl_target
         except Exception:
@@ -136,7 +136,7 @@ def run_thin_only(initial_airfoil, seed=42):
         TE_angle_min=6.03,
         CM_min=-0.133,
     )
-    config = OptimizerConfig(maxiter=80, popsize=15, seed=seed)
+    config = OptimizerConfig(maxiter=30, popsize=8, seed=seed)
 
     optimizer = GlobalAirfoilOptimizer.for_kulfan_airfoil(
         airfoil=initial_airfoil,
@@ -194,7 +194,7 @@ def run_multi_fidelity(initial_airfoil, seed=42):
         TE_angle_min=6.03,
         CM_min=-0.133,
     )
-    thin_config = OptimizerConfig(maxiter=50, popsize=10, seed=seed)
+    thin_config = OptimizerConfig(maxiter=20, popsize=6, seed=seed)
 
     t0 = time.perf_counter()
     result = multi_fidelity_optimize(
@@ -211,10 +211,43 @@ def run_multi_fidelity(initial_airfoil, seed=42):
 
 
 # ============================================================
+#  方法 4: 路由式多保真度 (switch/router)
+# ============================================================
+def run_routed(initial_airfoil, max_steps=5):
+    import sys
+    sys.path.insert(0, "src")
+    from piern.switch import RoutedOptimizer, OptimizationRouter
+
+    constraints = AirfoilConstraints(
+        CL_targets=CL_TARGETS,
+        CL_weights=CL_WEIGHTS,
+        thickness_at_33_min=0.128,
+        thickness_at_90_min=0.014,
+        TE_angle_min=6.03,
+        CM_min=-0.133,
+    )
+
+    router = OptimizationRouter(mode="rule")
+    optimizer = RoutedOptimizer(
+        airfoil=initial_airfoil,
+        constraints=constraints,
+        max_steps=max_steps,
+        router=router,
+        Re=500e3,
+        mach=MACH,
+    )
+
+    t0 = time.perf_counter()
+    result = optimizer.optimize()
+    elapsed = time.perf_counter() - t0
+    return result.airfoil, elapsed, result.total_steps, result.action_log
+
+
+# ============================================================
 #  单次完整对比
 # ============================================================
 def run_single_comparison(initial_airfoil, seed=42, label=""):
-    """运行三种方法并返回结果字典。"""
+    """运行四种方法并返回结果字典。"""
     print_header(f"初始翼型: {label}")
 
     # 基准
@@ -255,6 +288,19 @@ def run_single_comparison(initial_airfoil, seed=42, label=""):
     print(f"  耗时: {t3:.2f}s  Stage1评估: {nfev3}")
     results["multi"] = {"wcd": wcd3, "time": t3, "nfev": nfev3, "airfoil": af3}
 
+    # 方法4: 路由式多保真度
+    print("\n  [4] 路由式多保真度 (switch/router) ...")
+    af4, t4, steps4, actions4 = run_routed(initial_airfoil, max_steps=3)
+    CL4, CD4, CM4, A4, R4 = eval_airfoil_multipoint(af4)
+    wcd4 = weighted_cd(CD4)
+    print_aero("路由式", CL4, CD4, CM4, A4, R4)
+    print_geometry("几何", af4)
+    from piern.switch import FidelityAction
+    action_names = [FidelityAction(a).name for a in actions4]
+    print(f"  耗时: {t4:.2f}s  步数: {steps4}")
+    print(f"  动作序列: {action_names}")
+    results["routed"] = {"wcd": wcd4, "time": t4, "nfev": steps4, "airfoil": af4}
+
     return results
 
 
@@ -283,8 +329,8 @@ def main():
 
     # 汇总稳定性
     print_header(f"稳定性汇总: {airfoil_name}")
-    methods = ["thin", "neural", "multi"]
-    method_names = {"thin": "薄翼+DE", "neural": "NeuralFoil+IPOPT", "multi": "多保真度"}
+    methods = ["thin", "neural", "multi", "routed"]
+    method_names = {"thin": "薄翼+DE", "neural": "NeuralFoil+IPOPT", "multi": "多保真度", "routed": "路由式"}
     for m in methods:
         wcds = [r[m]["wcd"] for r in all_results]
         times = [r[m]["time"] for r in all_results]

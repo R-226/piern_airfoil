@@ -7,7 +7,7 @@ from .global_optimizer import GlobalAirfoilOptimizer, OptimizerConfig, Optimizat
 from .multi_fidelity import MultiFidelityResult, multi_fidelity_optimize
 from .router import FidelityAction, OptimizationRouter, OptimizationState
 from .routed_optimizer import RoutedMultiFidelityOptimizer, RoutedResult
-from .thin_airfoil_solver import ThinAirfoilResult, thin_airfoil_analysis, thin_airfoil_from_kulfan
+from .thin_airfoil_solver import ThinAirfoilResult, thin_airfoil_analysis, thin_airfoil_from_kulfan, thin_airfoil_multipoint_cd
 
 __all__ = [
     "AirfoilConstraints",
