@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .constraints import AirfoilConstraints, FidelityLevel
-from .router import FidelityAction, OptimizationRouter, OptimizationState, N_ACTIONS
+from ..constraints import AirfoilConstraints, FidelityLevel
+from .._legacy.router import FidelityAction, OptimizationRouter, OptimizationState, N_ACTIONS
 
 if TYPE_CHECKING:
     import aerosandbox as asb
@@ -163,7 +163,7 @@ class RoutedMultiFidelityOptimizer:
     def _run_de(self, action: FidelityAction) -> "asb.KulfanAirfoil":
         """Run differential evolution with thin airfoil theory."""
         import aerosandbox as asb
-        from .global_optimizer import GlobalAirfoilOptimizer, OptimizerConfig
+        from .._legacy.global_optimizer import GlobalAirfoilOptimizer, OptimizerConfig
 
         if action == FidelityAction.TAT_DE_SHALLOW:
             config = OptimizerConfig(maxiter=20, popsize=5, seed=None)
@@ -200,7 +200,7 @@ class RoutedMultiFidelityOptimizer:
 
     def _run_lbfgsb(self, action: FidelityAction) -> "asb.KulfanAirfoil":
         """Run L-BFGS-B with NeuralFoil at specified model size."""
-        from .gradient_optimizer import GradientOptConfig, optimize_with_lbfgsb
+        from .._legacy.gradient_optimizer import GradientOptConfig, optimize_with_lbfgsb
 
         model_size = action.model_size or "xxsmall"
 

@@ -39,8 +39,9 @@ uv run mypy src/                 # type check
 ### Key Entry Points
 ```bash
 uv run python -m piern.view.app                          # Gradio web UI
-uv run python tests/test_hierarchical_cst.py             # hierarchical CST test
-uv run python -m piern_airfoil.neuralfoil.neuralfoil     # NeuralOptimizer demo
+uv run python tests/test_hierarchical_visual.py          # hierarchical CST + visualization
+uv run python tests/test_dae11_comparison.py             # DAE-11 comparison
+uv run python tests/test_adaptive_hierarchical.py        # adaptive hierarchical test
 uv run python -m piern.prompt2data.encoder_extractor     # prompt2data training
 ```
 
@@ -50,18 +51,15 @@ The codebase has two top-level packages under `src/`:
 
 ### `piern_airfoil/` — Core optimization engines
 
-- **`neuralfoil/neuralfoil.py`**: `NeuralOptimizer` wraps Aerosandbox's `Opti` + `KulfanAirfoil` + NeuralFoil. Minimizes weighted CD subject to constraints (CL, CM, thickness, TE angle, wiggliness). Supports warm-starting.
-- **`thin_airfoil/`**: The multi-fidelity subsystem:
-  - `thin_airfoil_solver.py`: Classical thin airfoil theory (Glauert Fourier coefficients, Prandtl-Glauert compressibility). Provides `thin_airfoil_from_kulfan()` bridge to Kulfan parameterization.
-  - `constraints.py`: `AirfoilConstraints` dataclass — unified interface for geometry (always enforced) and aerodynamic (NEURAL fidelity only) constraints.
-  - `hierarchical_optimizer.py`: **Core innovation** — Hierarchical CST parameterization optimization. Stage 1: low-dimensional search (4 weights/edge), Stage 2: high-dimensional refinement (8 weights/edge).
-  - `router.py` + `routed_optimizer.py`: Router for selecting optimization strategies (under development).
+- **`optimizer.py`**: `NeuralOptimizer` wraps Aerosandbox's `Opti` + `KulfanAirfoil` + NeuralFoil. Minimizes weighted CD subject to constraints (CL, CM, thickness, TE angle, LE radius, wiggliness). Supports warm-starting via IPOPT.
+- **`hierarchical.py`**: **Core innovation** — `AdaptiveHierarchicalOptimizer` uses CST parameterization dimension as the fidelity axis. Starts from low-dimensional (4 weights/edge), adaptively expands to 8 weights/edge based on convergence history.
+- **`constraints.py`**: `AirfoilConstraints` dataclass + `FidelityLevel` enum — unified constraint interface.
+- **`thin_airfoil.py`**: Classical thin airfoil theory (Glauert Fourier coefficients, Prandtl-Glauert compressibility). Provides `thin_airfoil_from_kulfan()` bridge to Kulfan parameterization.
+- **`_legacy/`**: Preserved for reference — DE optimizer, L-BFGS-B, model-size switching approach, old router. Not actively maintained.
 
 ### `piern/` — LLM integration and UI
 
-- **`prompt2data/`**: Extracts structured params (Mach, CL, weights, constraints) from Chinese text. Active model: `encoder_extractor.py` (regex number extraction + Transformer classifier, 18 output classes, ~3.3M params). Deprecated: `mlp.py`, `mlp_hidden.py`.
-- **`seq_level/`**: Binary classifier detecting "trigger boundaries" in LLM output — where reasoning ends and results should begin. Uses frozen Qwen3.5-0.8B embeddings + MLP.
-- **`switch/`**: Alternative namespace for routed optimization (delegates to `piern_airfoil.thin_airfoil`).
+- **`prompt2data/`**: Extracts structured params (Mach, CL, weights, constraints) from Chinese text. Active model: `encoder_extractor.py` (regex number extraction + Transformer classifier, 18 output classes, ~3.3M params). Deprecated: `_deprecated/mlp.py`, `_deprecated/mlp_hidden.py`.
 - **`view/`**: Gradio web UI (`app.py`) — accepts Chinese prompt + airfoil image, runs 3 optimization methods in parallel, compares results. `extract.py` detects blue contour pixels from images.
 
 ### Data flow
@@ -70,7 +68,7 @@ The codebase has two top-level packages under `src/`:
 Chinese prompt + airfoil image
   -> prompt2data (params) + view.extract (coordinates)
   -> asb.Airfoil.to_kulfan_airfoil() (initial guess)
-  -> optimization engines (TAT+DE, NeuralFoil+IPOPT, multi-fidelity, routed)
+  -> optimization engines (NeuralFoil+IPOPT, Hierarchical CST)
   -> comparison & visualization
 ```
 
@@ -84,4 +82,4 @@ Chinese prompt + airfoil image
 - **Chinese text**: Prompt templates and training data are in Chinese. The `encoder_extractor` works with Chinese numerical expressions.
 - **Checkpoints**: Model weights live in `checkpoint/` (not version-controlled). The Qwen3.5-0.8B base model is in `model/`.
 - **Tests are gitignored**: The `tests/` directory is in `.gitignore`.
-- **Deprecated modules**: `piern/prompt2data/mlp.py`, `mlp_hidden.py`, and `piern/switch/` are deprecated. Use `encoder_extractor.py` and `piern_airfoil/thin_airfoil/` instead.
+- **Legacy code**: `piern_airfoil/_legacy/` contains earlier exploration code (DE, L-BFGS-B, model-size switching). Use `piern_airfoil.optimizer` and `piern_airfoil.hierarchical` instead.

@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from .constraints import AirfoilConstraints, FidelityLevel
-from .gradient_optimizer import GradientOptConfig, GradientOptResult, optimize_with_lbfgsb
+from ..constraints import AirfoilConstraints, FidelityLevel
+from .._legacy.gradient_optimizer import GradientOptConfig, GradientOptResult, optimize_with_lbfgsb
 
 if TYPE_CHECKING:
     import aerosandbox as asb
@@ -78,7 +78,7 @@ def multi_fidelity_optimize(
     )
 
     # --- Stage 2: IPOPT with NeuralFoil large ---
-    from ..neuralfoil import NeuralOptimizer
+    from ..optimizer import NeuralOptimizer
 
     cl_targets = constraints.CL_targets
     cl_weights = constraints.CL_weights

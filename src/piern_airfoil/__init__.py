@@ -1,9 +1,13 @@
 """
-PIERN-Airfoil: Unified framework for automatic airfoil optimization.
+PIERN-Airfoil: Physics-Infused Expert Reasoning Network for Airfoil Optimization.
 
-Organized into two main modules:
-- neuralfoil: Gradient-based optimization using Aerosandbox + NeuralFoil (NeuralOptimizer)
-- thin_airfoil: Multi-fidelity optimization with thin airfoil theory + global search
+Core components:
+- NeuralOptimizer: CasADi+IPOPT with NeuralFoil (baseline gradient-based optimizer)
+- AdaptiveHierarchicalOptimizer: Hierarchical CST parameterization — the key innovation,
+  using parameterization dimension as the fidelity axis for multi-fidelity optimization
+- AirfoilConstraints: Unified constraint interface
+
+Legacy components are in `_legacy/` — preserved for reference but not actively maintained.
 
 Example usage:
     import aerosandbox as asb
@@ -20,25 +24,16 @@ Example usage:
     optimizer.update()
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
-from .neuralfoil import NeuralOptimizer
-from .thin_airfoil import (
-    AirfoilConstraints,
-    FidelityLevel,
-    GlobalAirfoilOptimizer,
-    OptimizerConfig,
-    multi_fidelity_optimize,
-    thin_airfoil_from_kulfan,
-)
+from .optimizer import NeuralOptimizer
+from .hierarchical import AdaptiveHierarchicalOptimizer
+from .constraints import AirfoilConstraints, FidelityLevel
 
 __all__ = [
     "__version__",
     "NeuralOptimizer",
+    "AdaptiveHierarchicalOptimizer",
     "AirfoilConstraints",
     "FidelityLevel",
-    "GlobalAirfoilOptimizer",
-    "OptimizerConfig",
-    "multi_fidelity_optimize",
-    "thin_airfoil_from_kulfan",
 ]

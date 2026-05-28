@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
 from scipy.optimize import brentq, differential_evolution, OptimizeResult
 
-from .constraints import AirfoilConstraints, FidelityLevel
+from ..constraints import AirfoilConstraints, FidelityLevel
 
 if TYPE_CHECKING:
     import aerosandbox as asb

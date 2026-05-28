@@ -177,7 +177,7 @@ def neuralfoil_optimization(initial_guess_airfoil, inputs):
 
 def build_constraints(params: dict):
     """Build AirfoilConstraints from extracted prompt parameters."""
-    from piern_airfoil.thin_airfoil.constraints import AirfoilConstraints
+    from piern_airfoil.constraints import AirfoilConstraints
 
     cl = params.get("CL", [0.0] * 6)
     weights = params.get("weights", [0] * 6)
@@ -212,8 +212,8 @@ def _run_thin_de(initial_airfoil, constraints, mach: float) -> OptMethodResult:
     """Run thin airfoil theory + differential evolution (global search)."""
     import aerosandbox as asb
 
-    from piern_airfoil.thin_airfoil.constraints import FidelityLevel
-    from piern_airfoil.thin_airfoil.global_optimizer import (
+    from piern_airfoil.constraints import FidelityLevel
+    from piern_airfoil._legacy.global_optimizer import (
         GlobalAirfoilOptimizer,
         OptimizerConfig,
     )
@@ -267,8 +267,8 @@ def _run_neuralfoil(initial_airfoil, params) -> OptMethodResult:
 
 def _run_multifidelity(initial_airfoil, constraints, mach: float) -> OptMethodResult:
     """Run multi-fidelity optimization (L-BFGS-B → IPOPT)."""
-    from piern_airfoil.thin_airfoil.gradient_optimizer import GradientOptConfig
-    from piern_airfoil.thin_airfoil.multi_fidelity import multi_fidelity_optimize
+    from piern_airfoil._legacy.gradient_optimizer import GradientOptConfig
+    from piern_airfoil._legacy.multi_fidelity import multi_fidelity_optimize
 
     t0 = time.perf_counter()
     result = multi_fidelity_optimize(
