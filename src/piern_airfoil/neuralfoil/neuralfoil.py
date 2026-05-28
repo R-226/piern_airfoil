@@ -65,6 +65,7 @@ class NeuralOptimizer:
                 self.optimized_airfoil.lower_weights[0] < -0.05,
                 self.optimized_airfoil.upper_weights[0] > 0.05,
                 self.optimized_airfoil.local_thickness() > 0,
+                self.optimized_airfoil.LE_radius() > 0,  # θ_LE = 180° for CST airfoils
             ]
         )
 
@@ -92,6 +93,7 @@ class NeuralOptimizer:
 
         sol = self.opti.solve(
             behavior_on_failure="return_last",
+            options={"ipopt.mu_strategy": "monotone", "ipopt.start_with_resto": "yes"},
         )
 
         self.optimized_airfoil = sol(self.optimized_airfoil)

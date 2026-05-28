@@ -49,6 +49,11 @@ class FidelityAction(IntEnum):
     # NeuralFoil xxxlarge + IPOPT (~21ms/eval, highest accuracy)
     NF_XXXL_IPOPT_3 = 11
 
+    # L-BFGS-B + NeuralFoil (fast gradient-based exploration)
+    NF_XXS_LBFGSB = 12   # xxsmall, fast exploration
+    NF_SMALL_LBFGSB = 13 # small, medium exploration
+    NF_LARGE_LBFGSB = 14 # large, accurate exploration
+
     @property
     def model_size(self) -> str | None:
         """NeuralFoil model size, or None for TAT."""
@@ -60,6 +65,7 @@ class FidelityAction(IntEnum):
             6: "large", 7: "large", 8: "large",
             9: "xlarge", 10: "xlarge",
             11: "xxxlarge",
+            12: "xxsmall", 13: "small", 14: "large",
         }
         return sizes[self.value]
 
@@ -71,11 +77,15 @@ class FidelityAction(IntEnum):
         if self.value == 1:
             return 0
         iters = {2: 1, 3: 3, 4: 1, 5: 3, 6: 1, 7: 3, 8: 10, 9: 1, 10: 3, 11: 3}
-        return iters[self.value]
+        return iters.get(self.value, 0)
 
     @property
     def is_de(self) -> bool:
         return self.value <= 1
+
+    @property
+    def is_lbfgsb(self) -> bool:
+        return self.value >= 12
 
     @property
     def cost_estimate(self) -> float:
@@ -93,6 +103,9 @@ class FidelityAction(IntEnum):
             9: 0.12,   # NF_XL_IPOPT_1
             10: 1.2,   # NF_XL_IPOPT_3
             11: 15.0,  # NF_XXXL_IPOPT_3
+            12: 0.08,  # NF_XXS_LBFGSB
+            13: 0.12,  # NF_SMALL_LBFGSB
+            14: 0.3,   # NF_LARGE_LBFGSB
         }
         return costs[self.value]
 
@@ -260,50 +273,50 @@ class OptimizationRouter:
         """Hand-crafted policy for bootstrapping.
 
         Strategy:
-        - Early exploration: prefer cheap fast actions (TAT_DE, NF_XXS)
-        - Mid optimization: prefer medium fidelity (NF_SMALL, NF_LARGE)
-        - Late refinement: prefer high fidelity (NF_XL, NF_XXXL)
+        - Early exploration: prefer L-BFGS-B (fast gradient-based, finds feasible solutions)
+        - Mid optimization: L-BFGS-B + IPOPT refinement
+        - Late refinement: high-fidelity IPOPT
         - Stuck (no improvement): switch to different fidelity level
-        - High constraint violation: prefer DE (global search)
+        - High constraint violation: prefer L-BFGS-B (smooth penalty landscape)
         """
         probs = np.zeros(self.n_actions, dtype=np.float32)
         ratio = state.budget_used_ratio
 
-        if ratio < 0.2:
-            # Early: cheap exploration
-            probs[FidelityAction.TAT_DE_SHALLOW] = 0.3
-            probs[FidelityAction.NF_XXS_IPOPT_1] = 0.3
-            probs[FidelityAction.NF_SMALL_IPOPT_1] = 0.2
-            probs[FidelityAction.NF_LARGE_IPOPT_1] = 0.2
-        elif ratio < 0.5:
-            # Mid: balanced
-            probs[FidelityAction.TAT_DE_DEEP] = 0.15
-            probs[FidelityAction.NF_SMALL_IPOPT_3] = 0.25
-            probs[FidelityAction.NF_LARGE_IPOPT_3] = 0.35
-            probs[FidelityAction.NF_XL_IPOPT_1] = 0.25
+        if ratio < 0.3:
+            # Early: L-BFGS-B exploration (fast, finds feasible CL targets)
+            probs[FidelityAction.NF_XXS_LBFGSB] = 0.4
+            probs[FidelityAction.NF_SMALL_LBFGSB] = 0.3
+            probs[FidelityAction.NF_LARGE_LBFGSB] = 0.2
+            probs[FidelityAction.NF_XXS_IPOPT_1] = 0.1
+        elif ratio < 0.6:
+            # Mid: L-BFGS-B + IPOPT refinement
+            probs[FidelityAction.NF_SMALL_LBFGSB] = 0.2
+            probs[FidelityAction.NF_LARGE_LBFGSB] = 0.3
+            probs[FidelityAction.NF_LARGE_IPOPT_3] = 0.3
+            probs[FidelityAction.NF_XL_IPOPT_1] = 0.2
         elif ratio < 0.8:
-            # Late: refinement
+            # Late: IPOPT refinement
             probs[FidelityAction.NF_LARGE_IPOPT_3] = 0.3
             probs[FidelityAction.NF_LARGE_IPOPT_10] = 0.3
             probs[FidelityAction.NF_XL_IPOPT_3] = 0.3
-            probs[FidelityAction.NF_XXS_IPOPT_3] = 0.1  # diversity
+            probs[FidelityAction.NF_LARGE_LBFGSB] = 0.1
         else:
             # Final: highest fidelity
             probs[FidelityAction.NF_XL_IPOPT_3] = 0.4
             probs[FidelityAction.NF_XXXL_IPOPT_3] = 0.4
             probs[FidelityAction.NF_LARGE_IPOPT_10] = 0.2
 
-        # If stuck, boost DE (global exploration)
+        # If stuck, try L-BFGS-B with different model size
         if len(state.objective_history) >= 3:
             recent = state.objective_history[-3:]
             if max(recent) - min(recent) < 1e-6 * abs(np.mean(recent)):
-                probs[FidelityAction.TAT_DE_DEEP] += 0.3
-                probs[FidelityAction.NF_XXS_IPOPT_1] += 0.1
+                probs[FidelityAction.NF_XXS_LBFGSB] += 0.2
+                probs[FidelityAction.NF_LARGE_LBFGSB] += 0.2
 
-        # If high constraint violation, boost DE
+        # If high constraint violation, prefer L-BFGS-B (smooth penalties)
         if state.constraint_violation > 0.1:
-            probs[FidelityAction.TAT_DE_DEEP] += 0.2
-            probs[FidelityAction.TAT_DE_SHALLOW] += 0.1
+            probs[FidelityAction.NF_LARGE_LBFGSB] += 0.3
+            probs[FidelityAction.NF_SMALL_LBFGSB] += 0.1
 
         # Normalize
         total = probs.sum()

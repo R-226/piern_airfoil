@@ -155,6 +155,8 @@ class RoutedMultiFidelityOptimizer:
         """
         if action.is_de:
             return self._run_de(action)
+        elif action.is_lbfgsb:
+            return self._run_lbfgsb(action)
         else:
             return self._run_neuralfoil(action)
 
@@ -195,6 +197,31 @@ class RoutedMultiFidelityOptimizer:
             leading_edge_weight=float(x[-1]),
             TE_thickness=0.0,
         )
+
+    def _run_lbfgsb(self, action: FidelityAction) -> "asb.KulfanAirfoil":
+        """Run L-BFGS-B with NeuralFoil at specified model size."""
+        from .gradient_optimizer import GradientOptConfig, optimize_with_lbfgsb
+
+        model_size = action.model_size or "xxsmall"
+
+        config = GradientOptConfig(
+            model_size=model_size,
+            maxiter=300,
+            maxfun=5000,
+            cl_penalty_scale=5000.0,
+        )
+
+        result = optimize_with_lbfgsb(
+            airfoil=self.current_airfoil,
+            constraints=self.constraints,
+            alpha=5.0,
+            Re=self.Re,
+            mach=self.mach,
+            config=config,
+        )
+
+        self.total_evaluations += result.nfev
+        return result.airfoil
 
     def _run_neuralfoil(self, action: FidelityAction) -> "asb.KulfanAirfoil":
         """Run NeuralFoil IPOPT with specified model size and iterations."""

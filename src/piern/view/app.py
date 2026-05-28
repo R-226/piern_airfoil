@@ -266,8 +266,8 @@ def _run_neuralfoil(initial_airfoil, params) -> OptMethodResult:
 
 
 def _run_multifidelity(initial_airfoil, constraints, mach: float) -> OptMethodResult:
-    """Run multi-fidelity optimization (thin DE → NeuralFoil)."""
-    from piern_airfoil.thin_airfoil.global_optimizer import OptimizerConfig
+    """Run multi-fidelity optimization (L-BFGS-B → IPOPT)."""
+    from piern_airfoil.thin_airfoil.gradient_optimizer import GradientOptConfig
     from piern_airfoil.thin_airfoil.multi_fidelity import multi_fidelity_optimize
 
     t0 = time.perf_counter()
@@ -277,7 +277,7 @@ def _run_multifidelity(initial_airfoil, constraints, mach: float) -> OptMethodRe
         alpha=5.0,
         Re=500e3,
         mach=mach,
-        thin_config=OptimizerConfig(maxiter=30, popsize=8, seed=42),
+        stage1_config=GradientOptConfig(model_size="xxsmall", maxiter=300, maxfun=5000),
         neural_max_iterations=2,
     )
     elapsed = time.perf_counter() - t0
@@ -285,12 +285,12 @@ def _run_multifidelity(initial_airfoil, constraints, mach: float) -> OptMethodRe
     return OptMethodResult(
         name="Multi-Fidelity",
         airfoil=result.airfoil,
-        objective=float(result.thin_result.fun) if result.thin_result else 0.0,
+        objective=float(result.stage1_result.best_cd) if result.stage1_result else 0.0,
         elapsed=elapsed,
         stats={
             "stage1_nfev": result.stage1_nfev,
             "stage2_nfev": result.stage2_nfev,
-            "neural_iterations": result.neural_iterations,
+            "stage2_iterations": result.stage2_iterations,
         },
     )
 
