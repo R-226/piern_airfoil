@@ -41,3 +41,8 @@ model/
 
 # diary
 docs/
+
+# Generated outputs
+*.png
+*.jpg
+*.pdf
