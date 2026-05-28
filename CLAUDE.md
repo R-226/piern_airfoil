@@ -43,6 +43,8 @@ uv run python tests/test_hierarchical_visual.py          # hierarchical CST + vi
 uv run python tests/test_dae11_comparison.py             # DAE-11 comparison
 uv run python tests/test_adaptive_hierarchical.py        # adaptive hierarchical test
 uv run python -m piern.prompt2data.encoder_extractor     # prompt2data training
+uv run python -m piern.router.train_threshold            # A1: learn optimal threshold
+uv run python -m piern.router.mlp_router                 # A2: train MLP router
 ```
 
 ## Architecture
@@ -52,13 +54,18 @@ The codebase has two top-level packages under `src/`:
 ### `piern_airfoil/` — Core optimization engines
 
 - **`optimizer.py`**: `NeuralOptimizer` wraps Aerosandbox's `Opti` + `KulfanAirfoil` + NeuralFoil. Minimizes weighted CD subject to constraints (CL, CM, thickness, TE angle, LE radius, wiggliness). Supports warm-starting via IPOPT.
-- **`hierarchical.py`**: **Core innovation** — `AdaptiveHierarchicalOptimizer` uses CST parameterization dimension as the fidelity axis. Starts from low-dimensional (4 weights/edge), adaptively expands to 8 weights/edge based on convergence history.
+- **`hierarchical.py`**: **Core innovation** — `AdaptiveHierarchicalOptimizer` uses CST parameterization dimension as the fidelity axis. Starts from low-dimensional (4 weights/edge), adaptively expands to 8 weights/edge based on convergence history. Uses `OptRouter` for routing decisions.
 - **`constraints.py`**: `AirfoilConstraints` dataclass + `FidelityLevel` enum — unified constraint interface.
 - **`thin_airfoil.py`**: Classical thin airfoil theory (Glauert Fourier coefficients, Prandtl-Glauert compressibility). Provides `thin_airfoil_from_kulfan()` bridge to Kulfan parameterization.
 - **`_legacy/`**: Preserved for reference — DE optimizer, L-BFGS-B, model-size switching approach, old router. Not actively maintained.
 
-### `piern/` — LLM integration and UI
+### `piern/` — LLM integration, router, and UI
 
+- **`router/`**: Optimization fidelity router (`OptRouter`) — decides when to expand CST weights.
+  - **`opt_router.py`**: Three modes: `rule` (fixed threshold), `threshold` (grid-search learned), `mlp` (learned 8-dim→3-action MLP, ~1000 params)
+  - **`train_threshold.py`**: Grid search for optimal improvement_threshold
+  - **`mlp_router.py`**: MLP router training pipeline
+  - **`trained/`**: Saved model weights (optimal_threshold.json, mlp_router.json)
 - **`prompt2data/`**: Extracts structured params (Mach, CL, weights, constraints) from Chinese text. Active model: `encoder_extractor.py` (regex number extraction + Transformer classifier, 18 output classes, ~3.3M params). Deprecated: `_deprecated/mlp.py`, `_deprecated/mlp_hidden.py`.
 - **`view/`**: Gradio web UI (`app.py`) — accepts Chinese prompt + airfoil image, runs 3 optimization methods in parallel, compares results. `extract.py` detects blue contour pixels from images.
 
@@ -68,7 +75,9 @@ The codebase has two top-level packages under `src/`:
 Chinese prompt + airfoil image
   -> prompt2data (params) + view.extract (coordinates)
   -> asb.Airfoil.to_kulfan_airfoil() (initial guess)
-  -> optimization engines (NeuralFoil+IPOPT, Hierarchical CST)
+  -> Hierarchical CST optimization
+     -> OptRouter (rule/threshold/mlp) decides fidelity transitions
+     -> Stage 1: 4 weights → Stage 2: 6-8 weights
   -> comparison & visualization
 ```
 

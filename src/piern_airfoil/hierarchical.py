@@ -20,6 +20,16 @@ if TYPE_CHECKING:
     import aerosandbox as asb
 
 
+def _load_router_threshold() -> float:
+    """Load learned threshold from trained model, fallback to 0.005."""
+    try:
+        from piern.router.opt_router import OptRouter
+        router = OptRouter.from_trained()
+        return router.improvement_threshold
+    except (FileNotFoundError, ImportError):
+        return 0.005
+
+
 @dataclass
 class StageResult:
     """单个优化阶段的结果"""
@@ -56,16 +66,21 @@ class AdaptiveHierarchicalOptimizer:
         Re: np.ndarray,
         mach: float = 0.03,
         start_weights: int = 4,
-        improvement_threshold: float = 0.01,
+        improvement_threshold: float | None = None,
         stability_threshold: float = 0.005,
+        router: object | None = None,  # OptRouter, lazy import
     ):
         self.CL_targets = CL_targets
         self.CL_weights = CL_weights
         self.Re = Re
         self.mach = mach
         self.start_weights = start_weights
-        self.improvement_threshold = improvement_threshold
+        self.improvement_threshold = (
+            improvement_threshold if improvement_threshold is not None
+            else _load_router_threshold()
+        )
         self.stability_threshold = stability_threshold
+        self._router = router
 
     def _evaluate_cd(self, airfoil) -> float:
         """评估翼型的加权CD。"""
@@ -192,39 +207,62 @@ class AdaptiveHierarchicalOptimizer:
 
         return result_airfoil, (result_upper, result_lower)
 
+    def _get_router(self):
+        """Get or create the OptRouter instance."""
+        if self._router is None:
+            from piern.router.opt_router import OptRouter, OptState
+            self._router = OptRouter(improvement_threshold=self.improvement_threshold)
+        return self._router
+
     def _decide_next_action(
         self,
         history: list[StageResult],
         n_active: int,
+        init_cd: float = 0.0,
     ) -> tuple[int, str]:
         """
         基于优化历史决定下一步动作。
 
-        策略：
-        1. 如果改进显著（>1%）→ 继续当前维度
-        2. 如果改进不足 → 立即开放更多参数（不在当前维度重复优化）
+        Uses OptRouter for routing decisions (supports rule/threshold/mlp modes).
 
         Returns:
             (新的n_active, 决策理由)
         """
+        from piern.router.opt_router import OptState
+
         if len(history) < 2:
             return n_active, "首次运行，继续观察"
 
-        # 计算改进率
-        prev_cd = history[-2].cd
-        curr_cd = history[-1].cd
-        improvement = (prev_cd - curr_cd) / prev_cd
+        router = self._get_router()
 
-        # 决策逻辑
-        if improvement > self.improvement_threshold:
-            return n_active, f"改进显著({improvement:.3f})，继续当前维度"
-        else:
-            # 无显著改进 → 立即开放更多参数
-            new_n_active = min(n_active + 2, 8)
-            if new_n_active > n_active:
-                return new_n_active, f"改进不足({improvement:.3f})，开放更多参数"
+        # Compute stall count
+        stall_count = 0
+        for i in range(len(history) - 1, 0, -1):
+            imp = (history[i - 1].cd - history[i].cd) / history[i - 1].cd
+            if imp < 0.001:
+                stall_count += 1
             else:
-                return n_active, f"已达到最大权重数量"
+                break
+
+        state = OptState(
+            stage=len(history),
+            n_active_weights=n_active,
+            cd=history[-1].cd,
+            prev_cd=history[-2].cd,
+            initial_cd=init_cd,
+            stall_count=stall_count,
+            max_stages=6,
+        )
+
+        action, new_n, reason = router.decide(state)
+
+        # Map OptAction to n_active
+        if action.value == "keep":
+            return new_n, reason
+        elif action.value == "expand":
+            return new_n, reason
+        else:
+            return new_n, reason
 
     def optimize(self, initial_airfoil) -> HierarchicalResult:
         """
@@ -269,7 +307,7 @@ class AdaptiveHierarchicalOptimizer:
             history.append(stage_result)
 
             # 决策下一步
-            new_n_active, message = self._decide_next_action(history, n_active)
+            new_n_active, message = self._decide_next_action(history, n_active, init_cd)
             stage_result.message = message
 
             # 记录决策日志
