@@ -1,5 +1,5 @@
 """
-PIERN-Airfoil: Physics-Infused Expert Reasoning Network for Airfoil Optimization.
+PIERN-Airfoil: Hierarchical CST airfoil optimization with adaptive fidelity routing.
 
 Core components:
 - NeuralOptimizer: CasADi+IPOPT with NeuralFoil (baseline gradient-based optimizer)
@@ -7,24 +7,29 @@ Core components:
   using parameterization dimension as the fidelity axis for multi-fidelity optimization
 - AirfoilConstraints: Unified constraint interface
 
-Legacy components are in `_legacy/` — preserved for reference but not actively maintained.
-
 Example usage:
     import aerosandbox as asb
-    from piern_airfoil import NeuralOptimizer
+    from piern_airfoil import AdaptiveHierarchicalOptimizer
+    from piern.router import OptRouter
+    import numpy as np
 
-    airfoil = asb.KulfanAirfoil("naca0012")
-    optimizer = NeuralOptimizer(
-        airfoil=airfoil,
-        CL_targets=[1.0],
-        CL_weights=[1.0],
-        RE=[500e3],
+    CL_TARGETS = np.array([0.8, 1.0, 1.2, 1.4, 1.5, 1.6])
+    CL_WEIGHTS = np.array([5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+    RE = 500e3 * (CL_TARGETS / 1.25) ** -0.5
+
+    router = OptRouter.from_mlp()
+    optimizer = AdaptiveHierarchicalOptimizer(
+        CL_targets=CL_TARGETS,
+        CL_weights=CL_WEIGHTS,
+        Re=RE,
         mach=0.03,
+        router=router,
     )
-    optimizer.update()
+    airfoil = asb.KulfanAirfoil("naca0012")
+    result = optimizer.optimize(airfoil)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from .optimizer import NeuralOptimizer
 from .hierarchical import AdaptiveHierarchicalOptimizer

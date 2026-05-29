@@ -12,8 +12,7 @@ build/
 __pycache__/
 *.pyc
 
-# test
-tests/
+# test outputs
 tests/output/
 *.ipynb
 .pytest_cache/
