@@ -14,6 +14,9 @@ __pycache__/
 
 # test
 tests/
+tests/output/
+*.ipynb
+.pytest_cache/
 
 # Lock files
 uv.lock
@@ -32,6 +35,7 @@ Thumbs.db
 
 # data
 data/
+*.dat
 
 # ckpt
 checkpoint/
@@ -46,3 +50,4 @@ docs/
 *.png
 *.jpg
 *.pdf
+*.zip

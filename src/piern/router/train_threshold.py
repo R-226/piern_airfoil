@@ -189,6 +189,11 @@ def run_episode(
     t0 = time.perf_counter()
 
     for stage_idx in range(max_stages):
+        # Force expansion to 8 weights on the final stage,
+        # so every episode reaches full dimensionality regardless of threshold.
+        if stage_idx == max_stages - 1:
+            n_active = 8
+
         # Run optimization
         result_airfoil, result_weights = run_stage(current_airfoil, n_active, current_weights)
         cd = evaluate_cd(result_airfoil)

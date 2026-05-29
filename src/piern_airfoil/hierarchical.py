@@ -286,6 +286,10 @@ class AdaptiveHierarchicalOptimizer:
 
         max_stages = 6  # 最多6个阶段
         for stage_idx in range(max_stages):
+            # 最后一阶段强制使用全部8个权重，确保最终精度
+            if stage_idx == max_stages - 1:
+                n_active = 8
+
             # 运行当前阶段
             result_airfoil, result_weights = self._run_stage(
                 current_airfoil, n_active, current_weights
