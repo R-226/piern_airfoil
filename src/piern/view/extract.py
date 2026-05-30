@@ -2,7 +2,7 @@
 
 Extracts airfoil contour coordinates from images containing blue airfoil
 outlines on white backgrounds. Outputs normalized (x, y) arrays compatible
-with piern_airfoil's thin_airfoil_analysis() and KulfanAirfoil fitting.
+with KulfanAirfoil fitting.
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ class AirfoilContour:
 
     @property
     def contour_x(self) -> np.ndarray:
-        """Flat x array (upper + lower concatenated) for thin_airfoil_analysis."""
+        """Flat x array (upper + lower concatenated) for KulfanAirfoil fitting."""
         return np.concatenate([self.x_surface, self.x_surface])
 
     @property
     def contour_y(self) -> np.ndarray:
-        """Flat y array (upper + lower concatenated) for thin_airfoil_analysis."""
+        """Flat y array (upper + lower concatenated) for KulfanAirfoil fitting."""
         return np.concatenate([self.y_upper, self.y_lower])
 
 

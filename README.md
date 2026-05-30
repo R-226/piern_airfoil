@@ -98,9 +98,8 @@ src/
 ├── piern_airfoil/              # Core optimization engines
 │   ├── optimizer.py            # Baseline: single-stage 8-weight IPOPT
 │   ├── hierarchical.py         # Innovation: adaptive 4->8 weight expansion
-│   ├── constraints.py          # AirfoilConstraints dataclass
-│   ├── thin_airfoil.py         # Classical thin airfoil theory
-│   └── _legacy/                # Reference implementations (DE, L-BFGS-B, etc.)
+│   ├── eval.py                 # Shared weighted CD evaluation
+│   └── _legacy/                # Ablation baselines (DE, L-BFGS-B, early router)
 │
 ├── piern/                      # Integration layer
 │   ├── router/                 # Fidelity routing
@@ -109,12 +108,10 @@ src/
 │   │   ├── train_threshold.py  # Grid search for optimal threshold
 │   │   └── trained/            # Saved model weights
 │   ├── prompt2data/            # Chinese NL -> structured parameters
-│   │   ├── encoder_extractor.py # Regex + Transformer classifier
-│   │   └── generate_diverse.py # Synthetic training data generation
+│   │   └── encoder_extractor.py # Regex + Transformer classifier
 │   ├── view/                   # Gradio web UI
 │   │   ├── app.py              # Interactive optimization interface
-│   │   ├── extract.py          # Airfoil image contour extraction
-│   │   └── verify.py           # Visual verification tools
+│   │   └── extract.py          # Airfoil image contour extraction
 │   └── pipeline.py             # End-to-end orchestration
 ```
 

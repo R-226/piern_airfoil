@@ -273,24 +273,11 @@ class PiernPipeline:
 
     def _quick_eval(self, airfoil, params: ExtractionResult) -> float:
         """Quick weighted CD evaluation using NeuralFoil."""
-        from scipy.optimize import brentq
+        from piern_airfoil.eval import evaluate_weighted_cd
 
-        total_cd = 0.0
-        for cl_t, re_i, w_i in zip(params.CL_targets, params.Re, params.CL_weights):
-            def residual(a, _af=airfoil, _re=re_i, _cl=cl_t):
-                aero = _af.get_aero_from_neuralfoil(
-                    alpha=a, Re=float(_re), mach=params.Mach
-                )
-                return float(np.asarray(aero["CL"]).flatten()[0]) - _cl
-            try:
-                alpha_i = brentq(residual, -5, 18, xtol=0.01, maxiter=30)
-            except (ValueError, RuntimeError):
-                alpha_i = 5.0
-            aero = airfoil.get_aero_from_neuralfoil(
-                alpha=alpha_i, Re=float(re_i), mach=params.Mach
-            )
-            total_cd += float(np.asarray(aero["CD"]).flatten()[0]) * w_i
-        return total_cd
+        return evaluate_weighted_cd(
+            airfoil, params.CL_targets, params.Re, params.CL_weights, mach=params.Mach,
+        )
 
     # ── Visualization ─────────────────────────────────────────────────
 

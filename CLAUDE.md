@@ -24,7 +24,7 @@ uv pip install -e .              # editable install
 ### Run Tests
 ```bash
 uv run pytest                    # all tests
-uv run pytest tests/test_multi_fidelity.py -v   # single file
+uv run pytest tests/test_pipeline.py -v   # single file
 uv run pytest -k "test_name"     # single test by name
 uv run pytest --cov=src --cov-report=term-missing
 ```
@@ -39,12 +39,10 @@ uv run mypy src/                 # type check
 ### Key Entry Points
 ```bash
 uv run python -m piern.view.app                          # Gradio web UI
-uv run python tests/test_hierarchical_visual.py          # hierarchical CST + visualization
-uv run python tests/test_dae11_comparison.py             # DAE-11 comparison
-uv run python tests/test_adaptive_hierarchical.py        # adaptive hierarchical test
 uv run python -m piern.prompt2data.encoder_extractor     # prompt2data training
 uv run python -m piern.router.train_threshold            # A1: learn optimal threshold
 uv run python -m piern.router.mlp_router                 # A2: train MLP router
+uv run python tests/benchmark_router.py                  # dual-scene benchmark
 ```
 
 ## Architecture
@@ -55,9 +53,12 @@ The codebase has two top-level packages under `src/`:
 
 - **`optimizer.py`**: `NeuralOptimizer` wraps Aerosandbox's `Opti` + `KulfanAirfoil` + NeuralFoil. Minimizes weighted CD subject to constraints (CL, CM, thickness, TE angle, LE radius, wiggliness). Supports warm-starting via IPOPT.
 - **`hierarchical.py`**: **Core innovation** — `AdaptiveHierarchicalOptimizer` uses CST parameterization dimension as the fidelity axis. Starts from low-dimensional (4 weights/edge), adaptively expands to 8 weights/edge based on convergence history. Uses `OptRouter` for routing decisions.
-- **`constraints.py`**: `AirfoilConstraints` dataclass + `FidelityLevel` enum — unified constraint interface.
-- **`thin_airfoil.py`**: Classical thin airfoil theory (Glauert Fourier coefficients, Prandtl-Glauert compressibility). Provides `thin_airfoil_from_kulfan()` bridge to Kulfan parameterization.
-- **`_legacy/`**: Preserved for reference — DE optimizer, L-BFGS-B, model-size switching approach, old router. Not actively maintained.
+- **`eval.py`**: Shared `evaluate_weighted_cd()` — single-point NeuralFoil CD evaluation used across optimizer, pipeline, and router training.
+- **`_legacy/`**: Earlier exploration code kept as **baseline comparisons for ablation studies**:
+  - `global_optimizer.py`: Differential Evolution (DE) — global search baseline
+  - `gradient_optimizer.py`: L-BFGS-B — local gradient baseline
+  - `multi_fidelity.py`: Model-size switching approach — predecessor to hierarchical CST
+  - `routed_optimizer.py` / `router.py`: Early router prototypes — predecessors to OptRouter
 
 ### `piern/` — LLM integration, router, and UI
 
@@ -66,8 +67,8 @@ The codebase has two top-level packages under `src/`:
   - **`train_threshold.py`**: Grid search for optimal improvement_threshold
   - **`mlp_router.py`**: MLP router training pipeline
   - **`trained/`**: Saved model weights (optimal_threshold.json, mlp_router.json)
-- **`prompt2data/`**: Extracts structured params (Mach, CL, weights, constraints) from Chinese text. Active model: `encoder_extractor.py` (regex number extraction + Transformer classifier, 18 output classes, ~3.3M params). Deprecated: `_deprecated/mlp.py`, `_deprecated/mlp_hidden.py`.
-- **`view/`**: Gradio web UI (`app.py`) — accepts Chinese prompt + airfoil image, runs 3 optimization methods in parallel, compares results. `extract.py` detects blue contour pixels from images.
+- **`prompt2data/`**: Extracts structured params (Mach, CL, weights, constraints) from Chinese text. Active model: `encoder_extractor.py` (regex number extraction + Transformer classifier, 18 output classes, ~3.3M params). `deprecated/` contains earlier MLP approaches kept for reference.
+- **`view/`**: Gradio web UI (`app.py`) — accepts Chinese prompt + airfoil image, runs Baseline + PiERN optimization in parallel, compares results. `extract.py` detects blue contour pixels from images. `verify.py` is a standalone contour extraction verification tool.
 
 ### Data flow
 
@@ -90,5 +91,4 @@ Chinese prompt + airfoil image
 - **Normalization**: The 18 aerodynamic parameters use mean/std normalization stored in `data/2com/normalization_params.json`.
 - **Chinese text**: Prompt templates and training data are in Chinese. The `encoder_extractor` works with Chinese numerical expressions.
 - **Checkpoints**: Model weights live in `checkpoint/` (not version-controlled). The Qwen3.5-0.8B base model is in `model/`.
-- **Tests are gitignored**: The `tests/` directory is in `.gitignore`.
-- **Legacy code**: `piern_airfoil/_legacy/` contains earlier exploration code (DE, L-BFGS-B, model-size switching). Use `piern_airfoil.optimizer` and `piern_airfoil.hierarchical` instead.
+- **Tests**: `tests/output/` is gitignored. Test scripts are tracked in git.

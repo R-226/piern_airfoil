@@ -84,21 +84,11 @@ class AdaptiveHierarchicalOptimizer:
 
     def _evaluate_cd(self, airfoil) -> float:
         """评估翼型的加权CD。"""
-        from scipy.optimize import brentq
+        from piern_airfoil.eval import evaluate_weighted_cd
 
-        total_cd = 0.0
-        for i, (cl_t, re_i, w_i) in enumerate(zip(self.CL_targets, self.Re, self.CL_weights)):
-            def residual(a, _af=airfoil, _re=re_i, _cl=cl_t):
-                aero = _af.get_aero_from_neuralfoil(alpha=a, Re=float(_re), mach=self.mach)
-                return float(np.asarray(aero["CL"]).flatten()[0]) - _cl
-            try:
-                alpha_i = brentq(residual, -3, 20, xtol=0.01, maxiter=30)
-            except (ValueError, RuntimeError):
-                alpha_i = 5.0
-            aero = airfoil.get_aero_from_neuralfoil(alpha=alpha_i, Re=float(re_i), mach=self.mach)
-            cd = float(np.asarray(aero["CD"]).flatten()[0])
-            total_cd += cd * w_i
-        return total_cd
+        return evaluate_weighted_cd(
+            airfoil, self.CL_targets, self.Re, self.CL_weights, mach=self.mach,
+        )
 
     def _run_stage(
         self,

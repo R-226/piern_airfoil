@@ -5,7 +5,7 @@ Core components:
 - NeuralOptimizer: CasADi+IPOPT with NeuralFoil (baseline gradient-based optimizer)
 - AdaptiveHierarchicalOptimizer: Hierarchical CST parameterization — the key innovation,
   using parameterization dimension as the fidelity axis for multi-fidelity optimization
-- AirfoilConstraints: Unified constraint interface
+- evaluate_weighted_cd: Shared NeuralFoil CD evaluation utility
 
 Example usage:
     import aerosandbox as asb
@@ -33,12 +33,11 @@ __version__ = "0.5.0"
 
 from .optimizer import NeuralOptimizer
 from .hierarchical import AdaptiveHierarchicalOptimizer
-from .constraints import AirfoilConstraints, FidelityLevel
+from .eval import evaluate_weighted_cd
 
 __all__ = [
     "__version__",
     "NeuralOptimizer",
     "AdaptiveHierarchicalOptimizer",
-    "AirfoilConstraints",
-    "FidelityLevel",
+    "evaluate_weighted_cd",
 ]
