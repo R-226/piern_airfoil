@@ -166,10 +166,21 @@ class PiernPipeline:
     # ── Step 2: Image → KulfanAirfoil ─────────────────────────────────
 
     def extract_airfoil(self, image_path: str | Path) -> asb.KulfanAirfoil:
-        """Extract airfoil shape from an image and fit to Kulfan parameterization."""
-        from piern.view.extract import get_coordinates_from_img
+        """Extract airfoil shape from an image or .dat file."""
+        from piern.view.extract import extract_airfoil
 
-        coords = get_coordinates_from_img(str(image_path))
+        image_path = Path(image_path)
+
+        if image_path.suffix.lower() == ".dat":
+            contour = extract_airfoil(image_path, method="dat")
+        else:
+            contour = extract_airfoil(image_path)
+
+        # Build coordinate array: upper TE→LE, then lower LE→TE
+        upper = np.column_stack([contour.x_surface, contour.y_upper])
+        lower = np.column_stack([contour.x_surface, contour.y_lower])
+        coords = np.vstack([upper, lower[::-1][1:]])
+
         coordinate_airfoil = asb.Airfoil(
             name="UserInput",
             coordinates=coords,

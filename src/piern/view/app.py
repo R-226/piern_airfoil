@@ -66,14 +66,14 @@ def extract_params_from_prompt(prompt: str) -> dict:
     return extract(model, tokenizer, prompt)
 
 
-def extract_contour_from_image(image_path: str | None):
+def extract_contour_from_image(image_path: str | None, method: str = "auto"):
     """Extract airfoil contour from an uploaded image."""
     if image_path is None:
         return None, None
 
     from piern.view.extract import extract_airfoil
 
-    contour = extract_airfoil(image_path)
+    contour = extract_airfoil(image_path, method=method)
 
     fig, ax = plt.subplots(figsize=(8, 3))
     ax.plot(contour.x_surface, contour.y_upper, "b-", linewidth=1.5, label="Upper")
@@ -162,7 +162,7 @@ def _run_baseline(initial_airfoil, params: dict):
 # ── Main callback ─────────────────────────────────────────────────
 
 
-def run_optimization(prompt: str, image, router_mode: str):
+def run_optimization(prompt: str, image, router_mode: str, extract_method: str = "auto"):
     """Extract inputs, run hierarchical + baseline optimization, compare results."""
     import aerosandbox as asb
 
@@ -171,7 +171,7 @@ def run_optimization(prompt: str, image, router_mode: str):
 
     # 2. Extract contour from image
     image_path = image if image else None
-    contour, contour_fig = extract_contour_from_image(image_path)
+    contour, contour_fig = extract_contour_from_image(image_path, method=extract_method)
 
     # 3. Build initial airfoil
     if contour is not None:
@@ -328,6 +328,11 @@ def build_app() -> gr.Blocks:
                     lines=4,
                 )
                 image_input = gr.Image(label="Airfoil image (optional)", type="filepath")
+                extract_method = gr.Radio(
+                    choices=["auto", "edge", "color", "dat"],
+                    value="auto",
+                    label="Extraction method",
+                )
                 router_mode = gr.Radio(
                     choices=["mlp", "threshold", "rule"],
                     value="mlp",
@@ -347,7 +352,7 @@ def build_app() -> gr.Blocks:
 
         run_btn.click(
             fn=run_optimization,
-            inputs=[prompt_input, image_input, router_mode],
+            inputs=[prompt_input, image_input, router_mode, extract_method],
             outputs=[params_output, contour_plot, result_output, comparison_plot],
         )
 
