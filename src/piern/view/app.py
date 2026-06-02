@@ -66,14 +66,14 @@ def extract_params_from_prompt(prompt: str) -> dict:
     return extract(model, tokenizer, prompt)
 
 
-def extract_contour_from_image(image_path: str | None, method: str = "auto"):
-    """Extract airfoil contour from an uploaded image."""
-    if image_path is None:
+def extract_contour_from_input(file_path: str | None, method: str = "auto"):
+    """Extract airfoil contour from an uploaded image or .dat file."""
+    if file_path is None:
         return None, None
 
     from piern.view.extract import extract_airfoil
 
-    contour = extract_airfoil(image_path, method=method)
+    contour = extract_airfoil(file_path, method=method)
 
     fig, ax = plt.subplots(figsize=(8, 3))
     ax.plot(contour.x_surface, contour.y_upper, "b-", linewidth=1.5, label="Upper")
@@ -162,16 +162,28 @@ def _run_baseline(initial_airfoil, params: dict):
 # ── Main callback ─────────────────────────────────────────────────
 
 
-def run_optimization(prompt: str, image, router_mode: str, extract_method: str = "auto"):
+def run_optimization(
+    prompt: str,
+    image,
+    dat_file,
+    router_mode: str,
+    extract_method: str = "auto",
+):
     """Extract inputs, run hierarchical + baseline optimization, compare results."""
     import aerosandbox as asb
 
     # 1. Extract parameters from prompt
     params = extract_params_from_prompt(prompt) if prompt and prompt.strip() else {}
 
-    # 2. Extract contour from image
-    image_path = image if image else None
-    contour, contour_fig = extract_contour_from_image(image_path, method=extract_method)
+    # 2. Extract contour from image or .dat file (.dat takes priority)
+    file_path = None
+    effective_method = extract_method
+    if dat_file is not None:
+        file_path = dat_file if isinstance(dat_file, str) else dat_file.name
+        effective_method = "dat"
+    elif image is not None:
+        file_path = image
+    contour, contour_fig = extract_contour_from_input(file_path, method=effective_method)
 
     # 3. Build initial airfoil
     if contour is not None:
@@ -328,6 +340,10 @@ def build_app() -> gr.Blocks:
                     lines=4,
                 )
                 image_input = gr.Image(label="Airfoil image (optional)", type="filepath")
+                dat_input = gr.File(
+                    label="Or upload .dat file (optional)",
+                    file_types=[".dat"],
+                )
                 extract_method = gr.Radio(
                     choices=["auto", "edge", "color", "dat"],
                     value="auto",
@@ -352,7 +368,7 @@ def build_app() -> gr.Blocks:
 
         run_btn.click(
             fn=run_optimization,
-            inputs=[prompt_input, image_input, router_mode, extract_method],
+            inputs=[prompt_input, image_input, dat_input, router_mode, extract_method],
             outputs=[params_output, contour_plot, result_output, comparison_plot],
         )
 

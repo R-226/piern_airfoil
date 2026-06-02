@@ -255,10 +255,10 @@ def _detect_rotation(coords: np.ndarray) -> float:
     principal = eigenvectors[:, np.argmax(eigenvalues)]
     angle = np.degrees(np.arctan2(principal[1], principal[0]))
 
-    # Normalize to [-45, 45]
-    if angle > 45:
+    # Normalize to [-45, 45] (eigenvector has 180° ambiguity)
+    while angle > 45:
         angle -= 90
-    elif angle < -45:
+    while angle < -45:
         angle += 90
 
     return angle
