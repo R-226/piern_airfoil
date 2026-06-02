@@ -62,7 +62,7 @@ def run_router_benchmark():
     log("PART 1: Router Benchmark")
     log("=" * 70)
 
-    from tests.benchmark_router import (
+    from benchmark_router import (
         load_benchmark_airfoils,
         run_benchmark_group,
         print_summary,
@@ -133,7 +133,7 @@ def run_pipeline_benchmark():
     log("PART 2: Pipeline Benchmark")
     log("=" * 70)
 
-    from tests.benchmark_pipeline import (
+    from benchmark_pipeline import (
         load_benchmark_airfoils,
         run_pipeline_benchmark as run_pipeline,
         visualize_by_category,
@@ -165,7 +165,7 @@ def run_ablation_study():
     log("PART 3: Ablation Study")
     log("=" * 70)
 
-    from tests.benchmark_ablation import (
+    from benchmark_ablation import (
         load_benchmark,
         run_ablation_1,
         run_ablation_2,
