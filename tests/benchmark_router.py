@@ -35,6 +35,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+from matplotlib.axes import Axes
 from scipy.optimize import brentq
 
 # ── CJK 字体配置 ────────────────────────────────────────────────────────
@@ -80,11 +81,11 @@ METHOD_LABELS = {
 }
 
 METHOD_COLORS = {
-    "initial": "#999999",
-    "baseline": "#1F77B4",
-    "rule": "#E45756",
-    "threshold": "#F58518",
-    "mlp": "#4C78D2",
+    "initial": "#8C8C8C",
+    "baseline": "#3370AC",
+    "rule": "#D44B3F",
+    "threshold": "#E8A838",
+    "mlp": "#2A8C6A",
 }
 
 OPT_METHODS = ["baseline", "rule", "threshold", "mlp"]
@@ -291,7 +292,14 @@ def run_benchmark_group(
     return all_stats, all_runs
 
 
-# ── 可视化 ─────────────────────────────────────────────────────────────
+# ── 可视化 — 出版级质量 ────────────────────────────────────────────────
+#
+# 设计规范:
+#   - 字体: Liberation Serif (Times New Roman 兼容), LaTeX 论文标准
+#   - 配色: 优化色盲友好调色板, 兼顾打印和屏幕显示
+#   - 尺寸: 7 英寸宽 (双栏), 300 DPI, 符合期刊出版要求
+#   - 仅保留左/下轴脊柱, 去除多余网格线, 最小化 chartjunk
+#   - 关键数据直接标注在图表上
 
 
 def _get_stats(
@@ -303,126 +311,246 @@ def _get_stats(
     return None
 
 
+# ── 出版级配色 (色盲友好, 高对比度) ────────────────────────────────────
+#
+# 基于 Wong (2011, Nature Methods) 色盲友好调色板优化:
+#   - Baseline (深蓝):   #3370AC  — 稳重, 作为基准参照
+#   - Rule (深红):       #D44B3F  — 温暖, 与蓝色形成强对比
+#   - Threshold (琥珀):  #E8A838  — 中性, 区分红/绿色盲
+#   - PiERN (深绿):      #2A8C6A  — 清凉, 在打印和屏幕均清晰可辨
+# 所有颜色在灰度打印下仍有可辨识的亮度差异。
+
+_SERIF_FONT = "Liberation Serif"
+_PALETTE = {
+    "baseline": "#3370AC",
+    "rule": "#D44B3F",
+    "threshold": "#E8A838",
+    "mlp": "#2A8C6A",
+}
+
+
+class _PubStyle:
+    """Publication figure constants for journal-sized figures.
+
+    All sizes calibrated for 7-inch (full-page) figures at 300 DPI.
+    Font sizes in points: title=10, axis=8.5, tick=7.5, annotation=6.5.
+    """
+    FIG_W = 7.0
+    ROW_H = 2.6
+    TITLE_SIZE = 10
+    AXIS_SIZE = 8.5
+    TICK_SIZE = 7.5
+    ANNOT_SIZE = 6.5
+    BAR_WIDTH = 0.17
+    INTRA_GROUP_GAP = 0.02
+    INTER_GROUP_GAP = 0.06
+    TICK_PARAMS = dict(direction="in", top=False, right=False, labelsize=TICK_SIZE, pad=3)
+    SPINE_PARAMS = dict(linewidth=0.6)
+    LEGEND_KW = dict(
+        fontsize=TICK_SIZE, frameon=False,
+        loc="upper center", bbox_to_anchor=(0.5, -0.22),
+        ncol=4, handletextpad=0.4, columnspacing=1.0,
+    )
+    GRID_KW = dict(axis="y", linewidth=0.3, alpha=0.35)
+
+
+def _style_axes(ax: Axes, x_label: str, y_label: str, title: str) -> None:
+    """Apply publication axis styling: spines, ticks, labels, subtle grid."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(_PubStyle.SPINE_PARAMS["linewidth"])
+    ax.tick_params(**_PubStyle.TICK_PARAMS)
+    ax.set_xlabel(x_label, fontsize=_PubStyle.AXIS_SIZE, fontfamily=_SERIF_FONT, labelpad=4)
+    ax.set_ylabel(y_label, fontsize=_PubStyle.AXIS_SIZE, fontfamily=_SERIF_FONT, labelpad=4)
+    ax.set_title(title, fontsize=_PubStyle.TITLE_SIZE, fontfamily=_SERIF_FONT, pad=6)
+    ax.yaxis.grid(True, linewidth=_PubStyle.GRID_KW["linewidth"],
+                  alpha=_PubStyle.GRID_KW["alpha"])
+    ax.set_axisbelow(True)
+
+
+def _annotate_bars(ax: Axes, bars, values: list[float], suffix: str = "%",
+                   offset_ratio: float = 0.02) -> None:
+    """Annotate bars with values, handling positive/negative positions."""
+    if not bars:
+        return
+    all_vals = [v for v in values if np.isfinite(v)]
+    if not all_vals:
+        return
+    y_range = max(all_vals) - min(all_vals) if len(all_vals) > 1 else 1.0
+    offset = y_range * offset_ratio if y_range > 0 else 0.01
+    for bar, v in zip(bars, values):
+        if not np.isfinite(v):
+            continue
+        va = "bottom" if v >= 0 else "top"
+        y_pos = bar.get_height() + offset if v >= 0 else bar.get_height() - offset
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, y_pos,
+            f"{v:+.1f}{suffix}", ha="center", va=va,
+            fontsize=_PubStyle.ANNOT_SIZE, fontfamily=_SERIF_FONT,
+        )
+
+
+def _grouped_bars(
+    ax: Axes, x: np.ndarray, data: dict[str, list[float]],
+    method_keys: list[str], bar_w: float, annotate: bool = False,
+    suffix: str = "%",
+) -> None:
+    """Render grouped bars with publication styling.
+
+    Args:
+        data: {method_key: [value_per_airfoil]}
+    """
+    n = len(method_keys)
+    for i, method in enumerate(method_keys):
+        vals = data[method]
+        offset = (i - (n - 1) / 2) * bar_w
+        bars = ax.bar(
+            x + offset, vals, bar_w,
+            label=METHOD_LABELS[method],
+            color=_PALETTE.get(method, METHOD_COLORS.get(method, "#888888")),
+            edgecolor="white", linewidth=0.3,
+        )
+        if annotate:
+            _annotate_bars(ax, bars, vals, suffix=suffix)
+
+
 def visualize_normal(
     all_stats: list[StatsResult],
     airfoils: list[str],
     save_path: str = "results/benchmark_normal.png",
 ):
-    """常规场景可视化。"""
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-    x = np.arange(len(airfoils))
-    n_m = len(OPT_METHODS)
-    width = 0.7 / n_m
+    """Normal scenario visualization — journal publication quality.
 
-    # ── 图1: 时间对比 (带误差棒) ──
-    ax = axes[0, 0]
-    for i, method in enumerate(OPT_METHODS):
-        means, stds = [], []
-        for af in airfoils:
-            s = _get_stats(all_stats, method, af)
-            means.append(s.time_mean if s else 0)
-            stds.append(s.time_std if s else 0)
-        offset = (i - (n_m - 1) / 2) * width
-        ax.bar(
-            x + offset, means, width, yerr=stds,
-            label=METHOD_LABELS[method], color=METHOD_COLORS[method],
-            alpha=0.85, edgecolor="white", linewidth=0.5, capsize=3,
-        )
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Optimization Time (mean ± std)", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([n.upper() for n in airfoils], fontsize=8, rotation=45, ha="right")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
+    Layout (2x2):
+      (a) CD improvement vs baseline (%)      — grouped bars, all 3 methods
+      (b) Time speedup vs baseline (ratio)    — grouped bars with speedup labels
+      (c) Success rate (%)                    — per-method bar chart
+      (d) Mean improvement summary            — bar chart of aggregated metrics
+    """
+    n_af = len(airfoils)
+    x = np.arange(n_af)
 
-    # ── 图2: CD 对比 (带误差棒) ──
-    ax = axes[0, 1]
-    for i, method in enumerate(OPT_METHODS):
-        means, stds = [], []
-        for af in airfoils:
-            s = _get_stats(all_stats, method, af)
-            means.append(s.cd_mean if s else 0)
-            stds.append(s.cd_std if s else 0)
-        offset = (i - (n_m - 1) / 2) * width
-        ax.bar(
-            x + offset, means, width, yerr=stds,
-            label=METHOD_LABELS[method], color=METHOD_COLORS[method],
-            alpha=0.85, edgecolor="white", linewidth=0.5, capsize=3,
-        )
-    ax.set_ylabel("Weighted CD")
-    ax.set_title("Final CD (mean ± std)", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([n.upper() for n in airfoils], fontsize=8, rotation=45, ha="right")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-
-    # ── 图3: 时间节省百分比 (PiERN vs Baseline) ──
-    ax = axes[1, 0]
-    compare_methods = ["rule", "threshold", "mlp"]
-    compare_colors = [METHOD_COLORS[m] for m in compare_methods]
-    compare_labels = [METHOD_LABELS[m] for m in compare_methods]
-    bar_w = 0.25
-    for i, (method, label, color) in enumerate(zip(compare_methods, compare_labels, compare_colors)):
-        savings = []
-        for af in airfoils:
-            base = _get_stats(all_stats, "baseline", af)
-            meth = _get_stats(all_stats, method, af)
-            if base and meth and base.time_mean > 0:
-                savings.append((base.time_mean - meth.time_mean) / base.time_mean * 100)
-            else:
-                savings.append(0)
-        offset = (i - 1) * bar_w
-        bars = ax.bar(x + offset, savings, bar_w, label=label, color=color, alpha=0.85)
-        for bar, s in zip(bars, savings):
-            va = "bottom" if s >= 0 else "top"
-            ax.text(
-                bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{s:+.0f}%", ha="center", va=va, fontsize=6, fontweight="bold",
-            )
-    ax.axhline(y=0, color="black", linewidth=1, alpha=0.5)
-    ax.set_ylabel("Time Saved vs Baseline (%)")
-    ax.set_title("Speed Advantage (positive = faster)", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([n.upper() for n in airfoils], fontsize=8, rotation=45, ha="right")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-
-    # ── 图4: CD 差异 (vs Baseline) ──
-    ax = axes[1, 1]
-    for i, (method, label, color) in enumerate(zip(compare_methods, compare_labels, compare_colors)):
-        diffs = []
-        for af in airfoils:
-            base = _get_stats(all_stats, "baseline", af)
-            meth = _get_stats(all_stats, method, af)
-            if base and meth:
-                diffs.append((meth.cd_mean - base.cd_mean) / base.cd_mean * 100)
-            else:
-                diffs.append(0)
-        offset = (i - 1) * bar_w
-        bars = ax.bar(x + offset, diffs, bar_w, label=label, color=color, alpha=0.85)
-        for bar, d in zip(bars, diffs):
-            va = "bottom" if d >= 0 else "top"
-            ax.text(
-                bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{d:+.1f}%", ha="center", va=va, fontsize=6, fontweight="bold",
-            )
-    ax.axhline(y=0, color="black", linewidth=1, alpha=0.5)
-    ax.set_ylabel("CD vs Baseline (%)")
-    ax.set_title("CD Difference (negative = better)", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([n.upper() for n in airfoils], fontsize=8, rotation=45, ha="right")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-
-    plt.suptitle(
-        f"Benchmark — Normal Cases ({len(airfoils)} airfoils)",
-        fontsize=14, fontweight="bold",
+    fig, axes = plt.subplots(
+        2, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 2),
+        gridspec_kw=dict(hspace=0.55, wspace=0.38),
     )
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    methods_3 = ["rule", "threshold", "mlp"]
+    bar_w = _PubStyle.BAR_WIDTH
+    af_labels = [n.upper()[:12] for n in airfoils]
+
+    # ── (a) CD improvement vs baseline ──
+    ax = axes[0, 0]
+    cd_imp = {m: [] for m in methods_3}
+    for af in airfoils:
+        base = _get_stats(all_stats, "baseline", af)
+        for m in methods_3:
+            meth = _get_stats(all_stats, m, af)
+            if base and meth and base.cd_mean > 0:
+                cd_imp[m].append((meth.cd_mean - base.cd_mean) / base.cd_mean * 100)
+            else:
+                cd_imp[m].append(0.0)
+
+    _grouped_bars(ax, x, cd_imp, methods_3, bar_w)
+    ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "$\\Delta$CD vs Baseline (%)", "(a) CD Improvement")
+    ax.legend(**_PubStyle.LEGEND_KW)
+
+    # ── (b) Time speedup vs baseline ──
+    ax = axes[0, 1]
+    time_sp = {m: [] for m in methods_3}
+    for af in airfoils:
+        base = _get_stats(all_stats, "baseline", af)
+        for m in methods_3:
+            meth = _get_stats(all_stats, m, af)
+            if base and meth and meth.time_mean > 0:
+                time_sp[m].append(base.time_mean / meth.time_mean)
+            else:
+                time_sp[m].append(1.0)
+
+    _grouped_bars(ax, x, time_sp, methods_3, bar_w)
+    ax.axhline(y=1.0, color="black", linewidth=0.6, alpha=0.5, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "Speedup (baseline / method)", "(b) Time Speedup")
+    # Annotate mean speedup per method in the top-right corner
+    for m in methods_3:
+        vals = [v for v in time_sp[m] if np.isfinite(v)]
+        if vals:
+            mean_sp = np.mean(vals)
+            ax.annotate(
+                f"{METHOD_LABELS[m]}: {mean_sp:.1f}$\\times$",
+                xy=(0.98, 0.95 - methods_3.index(m) * 0.10),
+                xycoords="axes fraction", ha="right", va="top",
+                fontsize=_PubStyle.ANNOT_SIZE, fontfamily=_SERIF_FONT,
+                color=_PALETTE.get(m, "#333333"),
+            )
+
+    # ── (c) Success rate ──
+    ax = axes[1, 0]
+    methods_all = OPT_METHODS
+    success_rates = []
+    for m in methods_all:
+        rates = [_get_stats(all_stats, m, af) for af in airfoils]
+        rates = [s.success_rate for s in rates if s]
+        success_rates.append(np.mean(rates) * 100 if rates else 0)
+
+    bars = ax.bar(
+        range(len(methods_all)), success_rates, 0.55,
+        color=[_PALETTE.get(m, "#888888") for m in methods_all],
+        edgecolor="white", linewidth=0.3,
+    )
+    for bar, rate in zip(bars, success_rates):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5,
+            f"{rate:.0f}%", ha="center", va="bottom",
+            fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, fontweight="bold",
+        )
+    ax.set_xticks(range(len(methods_all)))
+    ax.set_xticklabels(
+        [METHOD_LABELS[m] for m in methods_all],
+        fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT,
+    )
+    ax.set_ylim(0, 110)
+    _style_axes(ax, "", "Success Rate (%)", f"(c) Optimization Success (CD < 0.15)")
+
+    # ── (d) Mean CD improvement summary ──
+    ax = axes[1, 1]
+    mean_imp = []
+    for m in methods_3:
+        vals = cd_imp[m]
+        mean_imp.append(np.mean(vals))
+    bars = ax.bar(
+        range(len(methods_3)), mean_imp, 0.45,
+        color=[_PALETTE.get(m, "#888888") for m in methods_3],
+        edgecolor="white", linewidth=0.3,
+    )
+    for bar, val in zip(bars, mean_imp):
+        va = "bottom" if val >= 0 else "top"
+        y_pos = bar.get_height() + 0.3 if val >= 0 else bar.get_height() - 0.3
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, y_pos,
+            f"{val:+.2f}%", ha="center", va=va,
+            fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, fontweight="bold",
+        )
+    ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.7)
+    ax.set_xticks(range(len(methods_3)))
+    ax.set_xticklabels(
+        [METHOD_LABELS[m] for m in methods_3],
+        fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT,
+    )
+    _style_axes(ax, "", "Mean $\\Delta$CD vs Baseline (%)", "(d) Mean CD Improvement")
+
+    fig.suptitle(
+        f"Router Benchmark — Normal Cases ({n_af} airfoils)",
+        fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=0.99,
+    )
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
-    print(f"\n可视化已保存: {save_path}")
+    print(f"\nPublication figure saved: {save_path}")
 
 
 def visualize_hard(
@@ -430,115 +558,238 @@ def visualize_hard(
     airfoils: list[str],
     save_path: str = "results/benchmark_hard.png",
 ):
-    """困难场景可视化。"""
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-    x = np.arange(len(airfoils))
-    n_m = len(OPT_METHODS)
-    width = 0.75 / n_m
+    """Hard scenario visualization — journal publication quality.
 
-    # ── 图1: CD 对比 ──
+    Layout (2x2):
+      (a) CD comparison across all 4 methods  — grouped bars
+      (b) Optimization time                   — grouped bars
+      (c) Rescue rate (%)                     — bar chart with exact percentages
+      (d) CD improvement ratio (baseline/M)   — how much better PiERN is
+    """
+    n_af = len(airfoils)
+    x = np.arange(n_af)
+    bar_w = _PubStyle.BAR_WIDTH
+
+    fig, axes = plt.subplots(
+        2, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 2),
+        gridspec_kw=dict(hspace=0.55, wspace=0.38),
+    )
+
+    af_labels = [n.upper()[:12] for n in airfoils]
+
+    # ── (a) CD comparison ──
     ax = axes[0, 0]
-    for i, method in enumerate(OPT_METHODS):
-        means, stds = [], []
-        for af in airfoils:
-            s = _get_stats(all_stats, method, af)
-            means.append(s.cd_mean if s else 0)
-            stds.append(s.cd_std if s else 0)
-        offset = (i - (n_m - 1) / 2) * width
-        ax.bar(
-            x + offset, means, width, yerr=stds,
-            label=METHOD_LABELS[method], color=METHOD_COLORS[method],
-            alpha=0.85, capsize=3,
-        )
-    ax.axhline(y=0.078, color="green", linestyle=":", linewidth=1.5, alpha=0.7, label="Normal ~0.078")
-    ax.set_ylabel("Weighted CD")
-    ax.set_title("CD Comparison — Baseline Fails, PiERN Succeeds", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([n.upper() for n in airfoils], fontsize=8, rotation=45, ha="right")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-
-    # ── 图2: 时间对比 ──
-    ax = axes[0, 1]
-    for i, method in enumerate(OPT_METHODS):
-        means, stds = [], []
-        for af in airfoils:
-            s = _get_stats(all_stats, method, af)
-            means.append(s.time_mean if s else 0)
-            stds.append(s.time_std if s else 0)
-        offset = (i - (n_m - 1) / 2) * width
-        ax.bar(
-            x + offset, means, width, yerr=stds,
-            label=METHOD_LABELS[method], color=METHOD_COLORS[method],
-            alpha=0.85, capsize=3,
-        )
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Optimization Time", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([n.upper() for n in airfoils], fontsize=8, rotation=45, ha="right")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-
-    # ── 图3: 救援率 (成功率) ──
-    ax = axes[1, 0]
-    success_rates = {m: [] for m in OPT_METHODS}
+    cd_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
         for m in OPT_METHODS:
             s = _get_stats(all_stats, m, af)
-            success_rates[m].append(s.success_rate if s else 0)
-    bars = ax.bar(
-        range(len(OPT_METHODS)),
-        [np.mean(success_rates[m]) * 100 for m in OPT_METHODS],
-        0.6,
-        color=[METHOD_COLORS[m] for m in OPT_METHODS],
-        alpha=0.85,
-    )
-    for bar, m in zip(bars, OPT_METHODS):
-        rate = np.mean(success_rates[m]) * 100
-        ax.text(
-            bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-            f"{rate:.0f}%", ha="center", va="bottom", fontsize=10, fontweight="bold",
-        )
-    ax.set_ylabel("Success Rate (%)")
-    ax.set_title(f"Success Rate (CD < 0.15, {len(airfoils)} airfoils)", fontweight="bold")
-    ax.set_xticks(range(len(OPT_METHODS)))
-    ax.set_xticklabels([METHOD_LABELS[m] for m in OPT_METHODS], fontsize=9)
-    ax.set_ylim(0, 110)
-    ax.grid(axis="y", alpha=0.3)
+            cd_data[m].append(s.cd_mean if s and s.cd_mean < 1e10 else 0.0)
 
-    # ── 图4: CD 改进倍数 ──
+    _grouped_bars(ax, x, cd_data, OPT_METHODS, bar_w, annotate=False)
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "Weighted CD", "(a) CD Comparison")
+    ax.legend(**_PubStyle.LEGEND_KW)
+
+    # ── (b) Optimization time ──
+    ax = axes[0, 1]
+    time_data = {m: [] for m in OPT_METHODS}
+    for af in airfoils:
+        for m in OPT_METHODS:
+            s = _get_stats(all_stats, m, af)
+            time_data[m].append(s.time_mean if s else 0.0)
+
+    _grouped_bars(ax, x, time_data, OPT_METHODS, bar_w, annotate=False)
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "Time (s)", "(b) Optimization Time")
+
+    # ── (c) Rescue rate ──
+    ax = axes[1, 0]
+    success_rates = []
+    for m in OPT_METHODS:
+        rates = [_get_stats(all_stats, m, af) for af in airfoils]
+        rates = [s.success_rate for s in rates if s]
+        success_rates.append(np.mean(rates) * 100 if rates else 0)
+
+    bars = ax.bar(
+        range(len(OPT_METHODS)), success_rates, 0.55,
+        color=[_PALETTE.get(m, "#888888") for m in OPT_METHODS],
+        edgecolor="white", linewidth=0.3,
+    )
+    for bar, rate in zip(bars, success_rates):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5,
+            f"{rate:.0f}%", ha="center", va="bottom",
+            fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, fontweight="bold",
+        )
+    ax.set_xticks(range(len(OPT_METHODS)))
+    ax.set_xticklabels(
+        [METHOD_LABELS[m] for m in OPT_METHODS],
+        fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT,
+    )
+    ax.set_ylim(0, 110)
+    _style_axes(ax, "", "Success Rate (%)", "(c) Rescue Rate (CD < 0.15)")
+
+    # ── (d) CD improvement ratio ──
     ax = axes[1, 1]
-    ratios = []
-    labels_list = []
+    ratios, ratio_labels = [], []
     for af in airfoils:
         base = _get_stats(all_stats, "baseline", af)
         piern = _get_stats(all_stats, "mlp", af)
-        if base and piern and piern.cd_mean > 0:
+        if base and piern and piern.cd_mean > 0 and base.cd_mean < 1e10:
             ratios.append(base.cd_mean / piern.cd_mean)
-            labels_list.append(af.upper())
-    bar_colors = [METHOD_COLORS["mlp"] if r > 1.1 else "#cccccc" for r in ratios]
-    bars = ax.bar(range(len(ratios)), ratios, 0.6, color=bar_colors, alpha=0.85)
+            ratio_labels.append(af.upper()[:12])
+
+    ratio_colors = [_PALETTE["mlp"] if r >= 1.0 else "#C0C0C0" for r in ratios]
+    bars = ax.bar(
+        range(len(ratios)), ratios, 0.55,
+        color=ratio_colors, edgecolor="white", linewidth=0.3,
+    )
     for bar, ratio in zip(bars, ratios):
         ax.text(
             bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
-            f"{ratio:.1f}x", ha="center", va="bottom", fontsize=9, fontweight="bold",
+            f"{ratio:.1f}$\\times$", ha="center", va="bottom",
+            fontsize=5.5, fontfamily=_SERIF_FONT,
         )
-    ax.axhline(y=1.0, color="red", linestyle="--", linewidth=1.5, alpha=0.7)
-    ax.set_ylabel("Baseline CD / PiERN CD")
-    ax.set_title("How Much Better PiERN Is (>1x = PiERN wins)", fontweight="bold")
+    ax.axhline(y=1.0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
     ax.set_xticks(range(len(ratios)))
-    ax.set_xticklabels(labels_list, fontsize=8, rotation=45, ha="right")
-    ax.grid(axis="y", alpha=0.3)
-
-    plt.suptitle(
-        f"Benchmark — Hard Cases ({len(airfoils)} airfoils)",
-        fontsize=14, fontweight="bold",
+    ax.set_xticklabels(ratio_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(
+        ax, "", "Baseline CD / PiERN CD",
+        "(d) PiERN Improvement Ratio",
     )
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    # Count wins
+    n_wins = sum(1 for r in ratios if r >= 1.0)
+    ax.annotate(
+        f"PiERN wins {n_wins}/{len(ratios)}",
+        xy=(0.98, 0.95), xycoords="axes fraction",
+        ha="right", va="top",
+        fontsize=_PubStyle.ANNOT_SIZE, fontfamily=_SERIF_FONT,
+        color=_PALETTE["mlp"],
+    )
+
+    fig.suptitle(
+        f"Router Benchmark — Hard Cases ({n_af} airfoils)",
+        fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=0.99,
+    )
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
-    print(f"可视化已保存: {save_path}")
+    print(f"Publication figure saved: {save_path}")
+
+
+def visualize_summary(
+    normal_stats: list[StatsResult],
+    hard_stats: list[StatsResult],
+    normal_afs: list[str],
+    hard_afs: list[str],
+    save_path: str = "results/benchmark_summary.png",
+):
+    """Cross-category summary figure for journal publication.
+
+    Layout (1x3):
+      (a) Mean CD improvement vs baseline (%)  — grouped by category
+      (b) Mean time speedup                    — grouped by category
+      (c) Success rate                         — grouped by category
+    """
+    categories = ["Normal", "Hard"]
+    cat_stats = [normal_stats, hard_stats]
+    cat_airfoils = [normal_afs, hard_afs]
+    methods = ["rule", "threshold", "mlp"]
+    x = np.arange(len(categories))
+    bar_w = 0.22
+
+    fig, axes = plt.subplots(
+        1, 3, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 0.85),
+        gridspec_kw=dict(wspace=0.40),
+    )
+
+    # ── (a) Mean CD improvement ──
+    ax = axes[0]
+    for i, m in enumerate(methods):
+        vals = []
+        for stats, afs in zip(cat_stats, cat_airfoils):
+            imps = []
+            for af in afs:
+                base = _get_stats(stats, "baseline", af)
+                meth = _get_stats(stats, m, af)
+                if base and meth and base.cd_mean > 0:
+                    imps.append((meth.cd_mean - base.cd_mean) / base.cd_mean * 100)
+            vals.append(np.mean(imps) if imps else 0)
+        offset = (i - 1) * bar_w
+        bars = ax.bar(
+            x + offset, vals, bar_w,
+            label=METHOD_LABELS[m], color=_PALETTE[m],
+            edgecolor="white", linewidth=0.3,
+        )
+        _annotate_bars(ax, bars, vals, suffix="%", offset_ratio=0.04)
+    ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT)
+    _style_axes(ax, "", "Mean $\\Delta$CD vs Baseline (%)", "(a) CD Improvement")
+    ax.legend(**_PubStyle.LEGEND_KW)
+
+    # ── (b) Mean time speedup ──
+    ax = axes[1]
+    for i, m in enumerate(methods):
+        vals = []
+        for stats, afs in zip(cat_stats, cat_airfoils):
+            speedups = []
+            for af in afs:
+                base = _get_stats(stats, "baseline", af)
+                meth = _get_stats(stats, m, af)
+                if base and meth and meth.time_mean > 0:
+                    speedups.append(base.time_mean / meth.time_mean)
+            vals.append(np.mean(speedups) if speedups else 1.0)
+        offset = (i - 1) * bar_w
+        bars = ax.bar(
+            x + offset, vals, bar_w,
+            label=METHOD_LABELS[m], color=_PALETTE[m],
+            edgecolor="white", linewidth=0.3,
+        )
+        for bar, v in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                f"{v:.1f}$\\times$", ha="center", va="bottom",
+                fontsize=_PubStyle.ANNOT_SIZE, fontfamily=_SERIF_FONT,
+            )
+    ax.axhline(y=1.0, color="black", linewidth=0.6, alpha=0.5, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT)
+    _style_axes(ax, "", "Speedup (baseline / method)", "(b) Time Speedup")
+
+    # ── (c) Success rate ──
+    ax = axes[2]
+    for i, m in enumerate(methods):
+        vals = []
+        for stats, afs in zip(cat_stats, cat_airfoils):
+            rates = [_get_stats(stats, m, af) for af in afs]
+            rates = [s.success_rate for s in rates if s]
+            vals.append(np.mean(rates) * 100 if rates else 0)
+        offset = (i - 1) * bar_w
+        bars = ax.bar(
+            x + offset, vals, bar_w,
+            label=METHOD_LABELS[m], color=_PALETTE[m],
+            edgecolor="white", linewidth=0.3,
+        )
+        for bar, v in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                f"{v:.0f}%", ha="center", va="bottom",
+                fontsize=_PubStyle.ANNOT_SIZE, fontfamily=_SERIF_FONT,
+            )
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT)
+    ax.set_ylim(0, 110)
+    _style_axes(ax, "", "Success Rate (%)", "(c) Optimization Success")
+
+    fig.suptitle(
+        "Router Benchmark Summary",
+        fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=1.02,
+    )
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close()
+    print(f"Publication summary figure saved: {save_path}")
 
 
 # ── CSV 导出 ────────────────────────────────────────────────────────────
@@ -640,6 +891,9 @@ def main():
     hard_stats, hard_runs = run_benchmark_group(hard_afs, "Hard")
     print_summary(hard_stats, "场景3: 困难翼型", hard_afs)
     visualize_hard(hard_stats, hard_afs)
+
+    # ── 汇总可视化 ──
+    visualize_summary(normal_stats, hard_stats, normal_afs, hard_afs)
 
     # ── 导出 CSV ──
     all_stats = normal_stats + medium_stats + hard_stats
