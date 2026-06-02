@@ -260,7 +260,7 @@ def visualize_by_category(
     plt.suptitle(f"Pipeline Benchmark — {category} ({len(airfoils)} airfoils)", fontsize=13, fontweight="bold")
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"可视化已保存: {save_path}")
 
@@ -339,7 +339,7 @@ def visualize_summary(
     plt.suptitle("Pipeline Benchmark Summary", fontsize=13, fontweight="bold")
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"汇总可视化已保存: {save_path}")
 

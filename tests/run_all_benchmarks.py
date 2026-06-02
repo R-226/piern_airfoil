@@ -9,6 +9,7 @@
     ├── run_all.log                    — 运行日志
     ├── benchmark_stats.csv            — Router benchmark 原始数据
     ├── benchmark_normal.png           — Router: 常规翼型对比
+    ├── benchmark_medium.png           — Router: 中等翼型对比
     ├── benchmark_hard.png             — Router: 困难翼型对比
     ├── benchmark_summary.png          — Router: 汇总图
     ├── benchmark_method_comparison.png — NeuralFoil vs XFoil+DE 对比
@@ -59,6 +60,7 @@ def run_router_benchmark():
         run_benchmark_group,
         print_summary,
         visualize_normal,
+        visualize_medium,
         visualize_hard,
         visualize_summary,
         visualize_method_comparison,
@@ -77,6 +79,7 @@ def run_router_benchmark():
 
     medium_stats, _ = run_benchmark_group(medium_afs, "Medium")
     print_summary(medium_stats, "Medium", medium_afs)
+    visualize_medium(medium_stats, medium_afs)
 
     hard_stats, _ = run_benchmark_group(hard_afs, "Hard")
     print_summary(hard_stats, "Hard", hard_afs)

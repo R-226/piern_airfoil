@@ -560,6 +560,101 @@ def visualize_normal(
     print(f"\nPublication figure saved: {save_path}")
 
 
+def visualize_medium(
+    all_stats: list[StatsResult],
+    airfoils: list[str],
+    save_path: str = "results/benchmark_medium.png",
+):
+    """Medium scenario visualization — same layout as normal."""
+    n_af = len(airfoils)
+    x = np.arange(n_af)
+
+    fig, axes = plt.subplots(
+        2, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 2),
+        gridspec_kw=dict(hspace=0.55, wspace=0.38),
+    )
+
+    methods_all = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
+    bar_w = _PubStyle.BAR_WIDTH * 0.8
+    af_labels = [n.upper()[:12] for n in airfoils]
+
+    # (a) CD
+    ax = axes[0, 0]
+    cd_data = {m: [] for m in methods_all}
+    for af in airfoils:
+        for m in methods_all:
+            s = _get_stats(all_stats, m, af)
+            cd_data[m].append(s.cd_mean if s and s.cd_mean < 1e10 else 0.0)
+    _grouped_bars(ax, x, cd_data, methods_all, bar_w)
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "Weighted CD", "(a) Final CD")
+    ax.legend(**_PubStyle.LEGEND_KW)
+
+    # (b) Time
+    ax = axes[0, 1]
+    time_data = {m: [] for m in methods_all}
+    for af in airfoils:
+        for m in methods_all:
+            s = _get_stats(all_stats, m, af)
+            time_data[m].append(s.time_mean if s else 0.0)
+    _grouped_bars(ax, x, time_data, methods_all, bar_w)
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "Time (s)", "(b) Optimization Time")
+
+    # (c) Success rate
+    ax = axes[1, 0]
+    success_rates = []
+    for m in methods_all:
+        rates = [_get_stats(all_stats, m, af) for af in airfoils]
+        rates = [s.success_rate for s in rates if s]
+        success_rates.append(np.mean(rates) * 100 if rates else 0)
+    bars = ax.bar(
+        range(len(methods_all)), success_rates, 0.55,
+        color=[_PALETTE.get(m, "#888888") for m in methods_all],
+        edgecolor="white", linewidth=0.3,
+    )
+    for bar, rate in zip(bars, success_rates):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5,
+            f"{rate:.0f}%", ha="center", va="bottom",
+            fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, fontweight="bold",
+        )
+    ax.set_xticks(range(len(methods_all)))
+    ax.set_xticklabels(
+        [METHOD_LABELS[m] for m in methods_all],
+        fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT,
+    )
+    ax.set_ylim(0, 110)
+    _style_axes(ax, "", "Success Rate (%)", "(c) Optimization Success (CD < 0.15)")
+
+    # (d) CD improvement
+    ax = axes[1, 1]
+    imp_data = {m: [] for m in methods_all}
+    for af in airfoils:
+        init_s = _get_stats(all_stats, "initial", af)
+        for m in methods_all:
+            meth = _get_stats(all_stats, m, af)
+            if init_s and meth and init_s.cd_mean > 0 and meth.cd_mean < 1e10:
+                imp_data[m].append((init_s.cd_mean - meth.cd_mean) / init_s.cd_mean * 100)
+            else:
+                imp_data[m].append(0.0)
+    _grouped_bars(ax, x, imp_data, methods_all, bar_w)
+    ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    _style_axes(ax, "", "CD Improvement over Initial (%)", "(d) Optimization Gain")
+
+    fig.suptitle(
+        f"Router Benchmark — Medium Cases ({n_af} airfoils)",
+        fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=0.99,
+    )
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close()
+    print(f"\nPublication figure saved: {save_path}")
+
+
 def visualize_hard(
     all_stats: list[StatsResult],
     airfoils: list[str],
