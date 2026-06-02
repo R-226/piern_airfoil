@@ -187,10 +187,7 @@ def run_optimization(
 
     # 3. Build initial airfoil
     if contour is not None:
-        upper_surface = np.column_stack([contour.x_surface, contour.y_upper])
-        lower_surface = np.column_stack([contour.x_surface, contour.y_lower])
-        coordinates = np.vstack([upper_surface, lower_surface[::-1][1:]])
-        initial_airfoil = asb.Airfoil(coordinates=coordinates).to_kulfan_airfoil()
+        initial_airfoil = asb.Airfoil(coordinates=contour.to_selig_coords()).to_kulfan_airfoil()
     else:
         initial_airfoil = asb.KulfanAirfoil("naca0012")
 

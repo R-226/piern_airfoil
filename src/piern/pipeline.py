@@ -176,14 +176,9 @@ class PiernPipeline:
         else:
             contour = extract_airfoil(image_path)
 
-        # Build coordinate array: upper TE→LE, then lower LE→TE
-        upper = np.column_stack([contour.x_surface, contour.y_upper])
-        lower = np.column_stack([contour.x_surface, contour.y_lower])
-        coords = np.vstack([upper, lower[::-1][1:]])
-
         coordinate_airfoil = asb.Airfoil(
             name="UserInput",
-            coordinates=coords,
+            coordinates=contour.to_selig_coords(),
         )
         return coordinate_airfoil.to_kulfan_airfoil()
 

@@ -39,6 +39,18 @@ class AirfoilContour:
         """Flat y array (upper + lower concatenated)."""
         return np.concatenate([self.y_upper, self.y_lower])
 
+    def to_selig_coords(self) -> np.ndarray:
+        """Convert to Selig-format coordinates: TE(upper)→LE→TE(lower).
+
+        Standard .dat coordinate order, compatible with asb.Airfoil(coordinates=...).
+        Returns shape (2N-1, 2) — LE point appears only once.
+        """
+        # Upper: TE→LE (x decreasing from 1 to 0)
+        upper = np.column_stack([self.x_surface[::-1], self.y_upper[::-1]])
+        # Lower: LE→TE (x increasing from 0 to 1), skip LE to avoid duplicate
+        lower = np.column_stack([self.x_surface, self.y_lower])
+        return np.vstack([upper, lower[1:]])
+
 
 # ── .dat file loading ───────────────────────────────────────────────
 
@@ -543,10 +555,9 @@ def save_dat(
 
 
 def get_coordinates_from_img(image_path: str | Path) -> np.ndarray:
-    """Extract airfoil coordinates as Nx2 array for asb.Airfoil."""
+    """Extract airfoil coordinates as Selig-format array for asb.Airfoil."""
     contour = extract_airfoil(image_path)
-    coordinates = np.column_stack([contour.contour_x, contour.contour_y])
-    return coordinates
+    return contour.to_selig_coords()
 
 
 # ── CLI ─────────────────────────────────────────────────────────────

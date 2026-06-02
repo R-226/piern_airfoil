@@ -280,10 +280,20 @@ class AdaptiveHierarchicalOptimizer:
             if stage_idx == max_stages - 1:
                 n_active = 8
 
-            # 运行当前阶段
-            result_airfoil, result_weights = self._run_stage(
-                current_airfoil, n_active, current_weights
-            )
+            # 运行当前阶段 (低维度失败时 fallback 到 8 权重)
+            try:
+                result_airfoil, result_weights = self._run_stage(
+                    current_airfoil, n_active, current_weights
+                )
+            except (ValueError, RuntimeError) as e:
+                if n_active < 8:
+                    # 低维度约束不可行，直接用 8 权重
+                    result_airfoil, result_weights = self._run_stage(
+                        current_airfoil, 8, current_weights
+                    )
+                    n_active = 8
+                else:
+                    raise
 
             # 评估结果
             cd = self._evaluate_cd(result_airfoil)

@@ -31,10 +31,11 @@ def evaluate_weighted_cd(
         alpha_range: (min, max) angle of attack in degrees for brentq search.
 
     Returns:
-        Total weighted CD (scalar).
+        Weighted mean CD (scalar) — matches NeuralFoil standard
+        `np.mean(aero["CD"] * CL_weights)`.
     """
-    total_cd = 0.0
-    for cl_t, re_i, w_i in zip(CL_targets, Re, CL_weights):
+    cd_values = []
+    for cl_t, re_i in zip(CL_targets, Re):
 
         def residual(a, _af=airfoil, _re=re_i, _cl=cl_t):
             aero = _af.get_aero_from_neuralfoil(
@@ -50,7 +51,6 @@ def evaluate_weighted_cd(
         aero = airfoil.get_aero_from_neuralfoil(
             alpha=alpha_i, Re=float(re_i), mach=mach
         )
-        cd = float(np.asarray(aero["CD"]).flatten()[0])
-        total_cd += cd * w_i
+        cd_values.append(float(np.asarray(aero["CD"]).flatten()[0]))
 
-    return total_cd
+    return float(np.mean(np.array(cd_values) * CL_weights))
