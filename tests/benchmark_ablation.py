@@ -23,6 +23,7 @@ Output:
   results/ablation_2_router_effect.png
   results/ablation_3_starting_dimension.png
   results/ablation_4_dimension_contribution.png
+  results/sensitivity.png
   results/ablation.csv
 """
 
@@ -148,13 +149,6 @@ def load_benchmark() -> tuple[list[str], list[str], list[str]]:
     return bench["normal"], bench["medium"], bench["hard"]
 
 
-def load_initial_cd() -> dict[str, float]:
-    """Load pre-computed initial CD values."""
-    with open(BENCHMARK_JSON) as f:
-        bench = json.load(f)
-    return bench["initial_cd"]
-
-
 # ── CD Evaluation ─────────────────────────────────────────────────────────
 
 
@@ -244,26 +238,34 @@ def run_hierarchical(
     start_weights: int = 4,
     method_label: str | None = None,
     ablation_tag: str = "A1",
+    threshold: float | None = None,
 ) -> AblationResult:
-    """Run hierarchical CST optimization with configurable router and start dimension."""
+    """Run hierarchical CST optimization with configurable router and start dimension.
+
+    Args:
+        threshold: Override the router's improvement_threshold. Only used for
+            rule/threshold modes. If None, uses the default (0.01 or learned).
+    """
     af = asb.KulfanAirfoil(airfoil_name)
     initial_cd = evaluate_cd(af)
 
     from piern_airfoil.hierarchical import AdaptiveHierarchicalOptimizer
     from piern.router.opt_router import OptRouter
 
+    default_thresh = threshold if threshold is not None else 0.01
+
     if router_mode == "mlp":
         try:
             router = OptRouter.from_mlp()
         except FileNotFoundError:
-            router = OptRouter(improvement_threshold=0.01, mode="rule")
+            router = OptRouter(improvement_threshold=default_thresh, mode="rule")
     elif router_mode == "threshold":
         try:
             router = OptRouter.from_trained()
         except FileNotFoundError:
-            router = OptRouter(improvement_threshold=0.01, mode="rule")
+            router = OptRouter(improvement_threshold=default_thresh, mode="rule")
     else:
-        router = OptRouter(improvement_threshold=0.01, mode="rule")
+        router = OptRouter(improvement_threshold=default_thresh, mode="rule")
 
     old_fd = _suppress_ipopt()
     t0 = time.perf_counter()
@@ -330,15 +332,26 @@ def aggregate(
             stages_mean=0, success_rate=0, cd_improvement_pct=0,
         )
 
-    cds = np.array([r.cd_final for r in runs])
-    times = np.array([r.time_s for r in runs])
-    stages = np.array([r.n_stages for r in runs])
     successes = np.array([r.success for r in runs])
+    ok_runs = [r for r in runs if r.success]
+
+    if not ok_runs:
+        return AggregatedStats(
+            method=method, label=label, n_airfoils=len(runs),
+            cd_mean=float("inf"), cd_median=float("inf"), cd_std=0,
+            time_mean=0, time_median=0, time_std=0,
+            stages_mean=0, success_rate=float(np.mean(successes)),
+            cd_improvement_pct=0,
+        )
+
+    cds = np.array([r.cd_final for r in ok_runs])
+    times = np.array([r.time_s for r in ok_runs])
+    stages = np.array([r.n_stages for r in ok_runs])
     improvements = np.array(
         [
             (r.cd_initial - r.cd_final) / r.cd_initial * 100
-            for r in runs
-            if r.cd_initial > 0 and r.cd_final < float("inf")
+            for r in ok_runs
+            if r.cd_initial > 0
         ]
     )
 
@@ -419,13 +432,21 @@ def visualize_ablation_1(results: list[AblationResult], airfoils: list[str]):
 
     # ── Panel (a): CD comparison scatter ──
     ax = axes[0]
+    sorted_airfoils = sorted(
+        airfoils,
+        key=lambda n: next(
+            (r.cd_initial for r in results if r.airfoil_name == n), 0
+        ),
+    )
     for method, label, color in zip(methods, labels, colors):
-        runs = sorted(
-            [r for r in results if r.method == method],
-            key=lambda r: airfoils.index(r.airfoil_name) if r.airfoil_name in airfoils else 0,
-        )
-        cds = [r.cd_final for r in runs if r.success]
-        xs = np.arange(len(cds))
+        cds = []
+        for name in sorted_airfoils:
+            run = next(
+                (r for r in results if r.method == method and r.airfoil_name == name),
+                None,
+            )
+            cds.append(run.cd_final if run and run.success else np.nan)
+        xs = np.arange(len(sorted_airfoils))
         ax.scatter(xs, cds, c=color, label=label, alpha=0.6, s=20, edgecolors="none")
     ax.set_xlabel("Airfoil index (sorted by initial CD)")
     ax.set_ylabel("Final Weighted CD")
@@ -934,6 +955,215 @@ def visualize_ablation_4(results: list[AblationResult], airfoils: list[str]):
     print(f"  Saved: {save_path}")
 
 
+# ── Sensitivity Analysis ─────────────────────────────────────────────────
+
+
+def run_sensitivity_analysis() -> list[AblationResult]:
+    """Parameter sensitivity sweep over threshold and start_weights.
+
+    Tests:
+      1. Threshold sweep: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05]
+         - Uses OptRouter(improvement_threshold=t) for each value
+      2. Start weights sweep: [4, 5, 6, 7, 8]
+         - Uses AdaptiveHierarchicalOptimizer(start_weights=w) for each value
+
+    Runs on a fixed subset of 10 airfoils (5 normal, 3 medium, 2 hard).
+    """
+    normal, medium, hard = load_benchmark()
+    subset = normal[:5] + medium[:3] + hard[:2]
+
+    thresholds = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05]
+    start_weights_list = [4, 5, 6, 7, 8]
+
+    print("\n" + "=" * 70)
+    print("SENSITIVITY ANALYSIS: Threshold & Start Weights Sweep")
+    print("=" * 70)
+    print(f"Subset:    {len(subset)} airfoils (5 normal, 3 medium, 2 hard)")
+    print(f"Threshold: {thresholds}")
+    print(f"Weights:   {start_weights_list}")
+    print()
+
+    results: list[AblationResult] = []
+
+    # ── Part 1: Threshold sweep ──
+    total_thresh = len(subset) * len(thresholds)
+    for i, name in enumerate(subset):
+        for j, t in enumerate(thresholds):
+            idx = i * len(thresholds) + j + 1
+            label = f"thresh_{t}"
+            print(
+                f"  [S-thresh {idx}/{total_thresh}] {name} t={t}...",
+                end=" ",
+                flush=True,
+            )
+            r = run_hierarchical(
+                name,
+                router_mode="rule",
+                start_weights=4,
+                method_label=label,
+                ablation_tag="S-thresh",
+                threshold=t,
+            )
+            results.append(r)
+            status = (
+                f"CD={r.cd_final:.6f} {r.time_s:.1f}s stages={r.n_stages}"
+                if r.success
+                else "FAILED"
+            )
+            print(status)
+
+    # ── Part 2: Start weights sweep ──
+    total_sw = len(subset) * len(start_weights_list)
+    for i, name in enumerate(subset):
+        for j, sw in enumerate(start_weights_list):
+            idx = i * len(start_weights_list) + j + 1
+            label = f"sens_sw{sw}"
+            print(
+                f"  [S-sw {idx}/{total_sw}] {name} start={sw}...",
+                end=" ",
+                flush=True,
+            )
+            r = run_hierarchical(
+                name,
+                router_mode="rule",
+                start_weights=sw,
+                method_label=label,
+                ablation_tag="S-sw",
+            )
+            results.append(r)
+            status = (
+                f"CD={r.cd_final:.6f} {r.time_s:.1f}s stages={r.n_stages}"
+                if r.success
+                else "FAILED"
+            )
+            print(status)
+
+    # ── Summary table ──
+    print(f"\n{'Parameter':<28} {'CD Mean':>10} {'Time Mean':>10} {'Stages':>8} {'N':>4} {'Success':>8}")
+    print("-" * 72)
+
+    for t in thresholds:
+        label = f"thresh_{t}"
+        ok = [r for r in results if r.method == label and r.success]
+        n = len([r for r in results if r.method == label])
+        if ok:
+            print(
+                f"threshold={t:<20} {np.mean([r.cd_final for r in ok]):>10.6f} "
+                f"{np.mean([r.time_s for r in ok]):>10.1f} "
+                f"{np.mean([r.n_stages for r in ok]):>8.1f} "
+                f"{n:>4} {len(ok)/n:>8.0%}"
+            )
+        else:
+            print(f"threshold={t:<20} {'---':>10} {'---':>10} {'---':>8} {n:>4} {'0%':>8}")
+
+    for sw in start_weights_list:
+        label = f"sens_sw{sw}"
+        ok = [r for r in results if r.method == label and r.success]
+        n = len([r for r in results if r.method == label])
+        if ok:
+            print(
+                f"start_weights={sw:<16} {np.mean([r.cd_final for r in ok]):>10.6f} "
+                f"{np.mean([r.time_s for r in ok]):>10.1f} "
+                f"{np.mean([r.n_stages for r in ok]):>8.1f} "
+                f"{n:>4} {len(ok)/n:>8.0%}"
+            )
+        else:
+            print(f"start_weights={sw:<16} {'---':>10} {'---':>10} {'---':>8} {n:>4} {'0%':>8}")
+
+    return results
+
+
+def visualize_sensitivity(results: list[AblationResult]):
+    """Publication figure: parameter sensitivity with 2 subplots.
+
+    Each subplot shows grouped bars for mean CD, mean time, and mean stages.
+    """
+    thresholds = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05]
+    start_weights_list = [4, 5, 6, 7, 8]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+
+    bar_width = 0.25
+    bar_alpha = 0.75
+    metric_colors = {
+        "cd": "#2166AC",
+        "time": "#D6604D",
+        "stages": "#4393C3",
+    }
+
+    def _collect(methods: list[str]) -> tuple[list[float], list[float], list[float]]:
+        """Return (cd_means, time_means, stages_means) for each method."""
+        cds, times, stages = [], [], []
+        for m in methods:
+            ok = [r for r in results if r.method == m and r.success]
+            if ok:
+                cds.append(float(np.mean([r.cd_final for r in ok])))
+                times.append(float(np.mean([r.time_s for r in ok])))
+                stages.append(float(np.mean([r.n_stages for r in ok])))
+            else:
+                cds.append(0.0)
+                times.append(0.0)
+                stages.append(0.0)
+        return cds, times, stages
+
+    # ── Subplot 1: Threshold effect ──
+    ax = axes[0]
+    thresh_methods = [f"thresh_{t}" for t in thresholds]
+    cds, times, stages = _collect(thresh_methods)
+
+    x = np.arange(len(thresholds))
+    ax.bar(x - bar_width, cds, bar_width, label="Mean CD", color=metric_colors["cd"],
+           alpha=bar_alpha, edgecolor="white", linewidth=0.5)
+    ax.bar(x, times, bar_width, label="Mean Time (s)", color=metric_colors["time"],
+           alpha=bar_alpha, edgecolor="white", linewidth=0.5)
+    ax.bar(x + bar_width, stages, bar_width, label="Mean Stages", color=metric_colors["stages"],
+           alpha=bar_alpha, edgecolor="white", linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(t) for t in thresholds], rotation=30, ha="right")
+    ax.set_xlabel("Improvement Threshold")
+    ax.set_ylabel("Value")
+    ax.set_title("(a) Threshold Sensitivity")
+    ax.legend(fontsize=8)
+
+    # Annotate CD bars with values
+    for xi, v in zip(x, cds):
+        if v > 0:
+            ax.annotate(f"{v:.4f}", xy=(xi - bar_width, v), fontsize=7,
+                        ha="center", va="bottom", color=metric_colors["cd"])
+
+    # ── Subplot 2: Start weights effect ──
+    ax = axes[1]
+    sw_methods = [f"sens_sw{w}" for w in start_weights_list]
+    cds, times, stages = _collect(sw_methods)
+
+    x = np.arange(len(start_weights_list))
+    ax.bar(x - bar_width, cds, bar_width, label="Mean CD", color=metric_colors["cd"],
+           alpha=bar_alpha, edgecolor="white", linewidth=0.5)
+    ax.bar(x, times, bar_width, label="Mean Time (s)", color=metric_colors["time"],
+           alpha=bar_alpha, edgecolor="white", linewidth=0.5)
+    ax.bar(x + bar_width, stages, bar_width, label="Mean Stages", color=metric_colors["stages"],
+           alpha=bar_alpha, edgecolor="white", linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(w) for w in start_weights_list])
+    ax.set_xlabel("Starting CST Weights")
+    ax.set_ylabel("Value")
+    ax.set_title("(b) Start Weights Sensitivity")
+    ax.legend(fontsize=8)
+
+    # Annotate CD bars with values
+    for xi, v in zip(x, cds):
+        if v > 0:
+            ax.annotate(f"{v:.4f}", xy=(xi - bar_width, v), fontsize=7,
+                        ha="center", va="bottom", color=metric_colors["cd"])
+
+    fig.suptitle("Parameter Sensitivity Analysis", fontweight="bold", y=1.02)
+    plt.tight_layout()
+    save_path = RESULTS_DIR / "sensitivity.png"
+    plt.savefig(save_path)
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
 # ── CSV Export ────────────────────────────────────────────────────────────
 
 
@@ -1033,6 +1263,11 @@ def main():
     r4 = run_ablation_4(all_airfoils)
     all_results.extend(r4)
     visualize_ablation_4(r4, all_airfoils)
+
+    # ── Sensitivity Analysis ──
+    rs = run_sensitivity_analysis()
+    all_results.extend(rs)
+    visualize_sensitivity(rs)
 
     # ── Export ──
     export_csv(all_results)

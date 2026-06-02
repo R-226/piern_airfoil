@@ -78,6 +78,7 @@ METHOD_LABELS = {
     "rule": "Rule",
     "threshold": "Threshold",
     "mlp": "PiERN Router",
+    "xfoil": "XFoil (ground truth)",
 }
 
 METHOD_COLORS = {
@@ -86,6 +87,7 @@ METHOD_COLORS = {
     "rule": "#D44B3F",
     "threshold": "#E8A838",
     "mlp": "#2A8C6A",
+    "xfoil": "#7B3294",
 }
 
 OPT_METHODS = ["baseline", "rule", "threshold", "mlp"]
@@ -228,6 +230,20 @@ def run_initial(airfoil_name: str) -> RunResult:
     return RunResult("initial", airfoil_name, cd, 0.0, 0)
 
 
+def run_xfoil_baseline(airfoil_name: str) -> RunResult:
+    """用 XFoil 评估原始翼型的加权 CD (高保真基线)。"""
+    from piern_airfoil.xfoil_baseline import xfoil_cd
+
+    t0 = time.perf_counter()
+    try:
+        cd = xfoil_cd(airfoil_name, CL_TARGETS, RE, CL_WEIGHTS, MACH)
+        elapsed = time.perf_counter() - t0
+        return RunResult("xfoil", airfoil_name, cd, elapsed, 0, success=cd < 0.5)
+    except Exception:
+        elapsed = time.perf_counter() - t0
+        return RunResult("xfoil", airfoil_name, float("inf"), elapsed, 0, success=False)
+
+
 # ── 统计计算 ────────────────────────────────────────────────────────────
 
 
@@ -266,7 +282,7 @@ def run_benchmark_group(
     """对一组翼型运行所有方法。"""
     all_runs: list[RunResult] = []
     all_stats: list[StatsResult] = []
-    total = len(airfoils) * (len(OPT_METHODS) + 1)
+    total = len(airfoils) * (len(OPT_METHODS) + 2)  # +2: initial + xfoil
     idx = 0
 
     for airfoil_name in airfoils:
@@ -276,6 +292,15 @@ def run_benchmark_group(
         all_runs.append(r)
         all_stats.append(compute_stats([r]))
         print(f"CD={r.cd:.4f}")
+
+        # XFoil ground truth evaluation
+        idx += 1
+        print(f"  [{label} {idx}/{total}] {airfoil_name} xfoil...", end=" ", flush=True)
+        r = run_xfoil_baseline(airfoil_name)
+        all_runs.append(r)
+        all_stats.append(compute_stats([r]))
+        status = f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED"
+        print(status)
 
         for method in OPT_METHODS:
             idx += 1
@@ -678,6 +703,69 @@ def visualize_hard(
     print(f"Publication figure saved: {save_path}")
 
 
+def visualize_xfoil_comparison(
+    all_stats: list[StatsResult],
+    airfoils: list[str],
+    save_path: str = "results/benchmark_xfoil_comparison.png",
+):
+    """NeuralFoil vs XFoil comparison — scatter plot for journal publication.
+
+    Shows per-airfoil NeuralFoil initial CD vs XFoil CD.
+    Perfect agreement falls on the y=x diagonal.
+    """
+    nf_cds, xf_cds, names = [], [], []
+    for af in airfoils:
+        nf = _get_stats(all_stats, "initial", af)
+        xf = _get_stats(all_stats, "xfoil", af)
+        if nf and xf and nf.cd_mean < 1e10 and xf.cd_mean < 1e10:
+            nf_cds.append(nf.cd_mean)
+            xf_cds.append(xf.cd_mean)
+            names.append(af)
+
+    if not nf_cds:
+        print("  Skipped xfoil comparison: no data")
+        return
+
+    nf_cds = np.array(nf_cds)
+    xf_cds = np.array(xf_cds)
+
+    fig, ax = plt.subplots(1, 1, figsize=(_PubStyle.FIG_W * 0.6, _PubStyle.ROW_H))
+    ax.scatter(nf_cds, xf_cds, c=_PALETTE["mlp"], s=25, alpha=0.7,
+               edgecolors="white", linewidths=0.3, zorder=5)
+
+    # y=x reference line
+    lims = [0, max(nf_cds.max(), xf_cds.max()) * 1.1]
+    ax.plot(lims, lims, "k--", linewidth=0.6, alpha=0.5, label="y = x")
+
+    # Per-point annotation for outliers (>20% deviation)
+    for nf_v, xf_v, name in zip(nf_cds, xf_cds, names):
+        if abs(xf_v - nf_v) / max(nf_v, 1e-6) > 0.20:
+            ax.annotate(
+                name.upper()[:8],
+                xy=(nf_v, xf_v), fontsize=5, fontfamily=_SERIF_FONT,
+                xytext=(4, 4), textcoords="offset points",
+            )
+
+    # Stats annotation
+    mape = np.mean(np.abs(xf_cds - nf_cds) / nf_cds) * 100
+    r2 = 1 - np.sum((xf_cds - nf_cds) ** 2) / np.sum((xf_cds - np.mean(xf_cds)) ** 2)
+    ax.annotate(
+        f"MAPE = {mape:.1f}%\nR$^2$ = {r2:.3f}",
+        xy=(0.05, 0.92), xycoords="axes fraction",
+        fontsize=_PubStyle.ANNOT_SIZE, fontfamily=_SERIF_FONT,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="#CCCCCC"),
+    )
+
+    _style_axes(ax, "NeuralFoil CD", "XFoil CD", "NeuralFoil vs XFoil (initial airfoils)")
+    ax.set_aspect("equal")
+    ax.legend(fontsize=_PubStyle.TICK_SIZE, frameon=False)
+
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close()
+    print(f"XFoil comparison figure saved: {save_path}")
+
+
 def visualize_summary(
     normal_stats: list[StatsResult],
     hard_stats: list[StatsResult],
@@ -894,6 +982,11 @@ def main():
 
     # ── 汇总可视化 ──
     visualize_summary(normal_stats, hard_stats, normal_afs, hard_afs)
+
+    # ── XFoil 对比 ──
+    all_stats_for_xfoil = normal_stats + medium_stats + hard_stats
+    all_afs_for_xfoil = normal_afs + medium_afs + hard_afs
+    visualize_xfoil_comparison(all_stats_for_xfoil, all_afs_for_xfoil)
 
     # ── 导出 CSV ──
     all_stats = normal_stats + medium_stats + hard_stats
