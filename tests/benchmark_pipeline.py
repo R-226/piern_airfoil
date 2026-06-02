@@ -1,28 +1,24 @@
 """
-全流程 Benchmark — 从图像/.dat/prompt 到优化结果。
+全流程 Pipeline Benchmark — 翼型提取精度对比。
 
 对比:
   1. Ground Truth: 直接从 aerosandbox 加载 KulfanAirfoil
-  2. .dat Pipeline: 翼型 → .dat 文件 → load_dat → 拟合 → 优化
-  3. Image Pipeline: 预渲染图片 → edge detection → 拟合 → 优化
-  4. Prompt Pipeline: 中文 prompt → 参数提取 → 优化
+  2. Image Pipeline: 预渲染图片 → edge detection → 拟合 → 优化
 
-翼型来源: data/benchmark_airfoils.json (固定集合, 基于 brentq 初始 CD 过滤)
-  - Normal: 30
-  - Medium: 44
-  - Hard:   31
-
+翼型来源: data/benchmark_airfoils.json (固定集合)
 图片来源: data/benchmark_images/ (预渲染)
 
 输出:
   results/pipeline_normal.png   — 常规翼型 pipeline 对比
   results/pipeline_medium.png   — 中等翼型 pipeline 对比
   results/pipeline_hard.png     — 困难翼型 pipeline 对比
+  results/pipeline_summary.png  — 汇总图
   results/pipeline_benchmark.csv — 原始数据
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import sys
@@ -56,13 +52,6 @@ MACH = 0.03
 BENCHMARK_JSON = Path(__file__).parent.parent / "data" / "benchmark_airfoils.json"
 IMAGES_DIR = Path(__file__).parent.parent / "data" / "benchmark_images"
 
-# ── 通用 prompt 模板 ─────────────────────────────────────────────────
-
-PROMPT_TEMPLATE = (
-    "设计一个翼型，马赫数0.03，CL目标值[0.8, 1.0, 1.2, 1.4, 1.5, 1.6]，"
-    "权重[5, 6, 7, 8, 9, 10]，厚度@33%c>=0.128，力矩系数>=-0.133，后缘角>=6.03°"
-)
-
 
 # ── 翼型加载 ──────────────────────────────────────────────────────────
 
@@ -80,7 +69,7 @@ def load_benchmark_airfoils() -> tuple[list[str], list[str], list[str]]:
 @dataclass
 class PipelineResult:
     airfoil_name: str
-    pipeline_type: str  # "ground_truth", "dat", "image", "prompt"
+    pipeline_type: str  # "ground_truth", "image"
     cd: float
     time: float
     success: bool
@@ -88,18 +77,6 @@ class PipelineResult:
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
-
-
-def generate_dat_file(name: str, output_path: Path) -> Path:
-    """从 aerosandbox 生成 .dat 文件。"""
-    af = asb.Airfoil(name)
-    coords = af.coordinates
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        f.write(f"{name}\n")
-        for x, y in coords:
-            f.write(f"{x:.7f} {y:.7f}\n")
-    return output_path
 
 
 def optimize_airfoil(airfoil) -> tuple[float, float]:
@@ -149,23 +126,6 @@ def test_ground_truth(name: str) -> PipelineResult:
         return PipelineResult(name, "ground_truth", float("inf"), 0, False)
 
 
-def test_dat_pipeline(name: str, tmp_dir: Path) -> PipelineResult:
-    try:
-        from piern.view.extract import load_dat
-
-        dat_path = tmp_dir / f"{name}.dat"
-        generate_dat_file(name, dat_path)
-
-        t0 = time.perf_counter()
-        contour = load_dat(dat_path)
-        kaf = _contour_to_kulfan(contour)
-        cd, _ = optimize_airfoil(kaf)
-        total_time = time.perf_counter() - t0
-        return PipelineResult(name, "dat", cd, total_time, True)
-    except Exception:
-        return PipelineResult(name, "dat", float("inf"), 0, False)
-
-
 def test_image_pipeline(name: str) -> PipelineResult:
     try:
         from piern.view.extract import extract_airfoil
@@ -184,43 +144,15 @@ def test_image_pipeline(name: str) -> PipelineResult:
         return PipelineResult(name, "image", float("inf"), 0, False)
 
 
-def test_prompt_pipeline() -> PipelineResult:
-    """Prompt Pipeline: 中文 prompt → 参数提取 → 优化。只跑一次。"""
-    try:
-        from piern.prompt2data.encoder_extractor import (
-            extract, CharTokenizer, FieldClassifier,
-            NUM_FIELDS, SAVE_DIR, DEVICE,
-        )
-        import torch
-
-        tokenizer = CharTokenizer(max_len=512)
-        model = FieldClassifier(
-            vocab_size=tokenizer.vocab_size, d_model=128, nhead=4,
-            num_layers=3, dim_ff=512, max_len=512, num_fields=NUM_FIELDS,
-        ).to(DEVICE)
-        model.load_state_dict(torch.load(SAVE_DIR, map_location=DEVICE, weights_only=True))
-        model.eval()
-
-        t0 = time.perf_counter()
-        params = extract(model, tokenizer, PROMPT_TEMPLATE)
-        af = asb.KulfanAirfoil("naca0012")
-        cd, _ = optimize_airfoil(af)
-        total_time = time.perf_counter() - t0
-        return PipelineResult("prompt_global", "prompt", cd, total_time, True)
-    except Exception:
-        return PipelineResult("prompt_global", "prompt", float("inf"), 0, False)
-
-
 # ── Benchmark 运行 ────────────────────────────────────────────────────
 
 
 def run_pipeline_benchmark(
     airfoils: list[str],
-    tmp_dir: Path,
 ) -> list[PipelineResult]:
-    """运行 ground_truth / dat / image pipeline，prompt 只跑一次。"""
+    """运行 ground_truth / image pipeline。"""
     results = []
-    total = len(airfoils) * 3 + 1  # 3 per airfoil + 1 prompt
+    total = len(airfoils) * 2
     idx = 0
 
     for name in airfoils:
@@ -231,23 +163,10 @@ def run_pipeline_benchmark(
         print(f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED")
 
         idx += 1
-        print(f"  [{idx}/{total}] {name} dat...", end=" ", flush=True)
-        r = test_dat_pipeline(name, tmp_dir)
-        results.append(r)
-        print(f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED")
-
-        idx += 1
         print(f"  [{idx}/{total}] {name} image...", end=" ", flush=True)
         r = test_image_pipeline(name)
         results.append(r)
         print(f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED")
-
-    # Prompt pipeline 只跑一次
-    idx += 1
-    print(f"  [{idx}/{total}] prompt...", end=" ", flush=True)
-    r = test_prompt_pipeline()
-    results.append(r)
-    print(f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED")
 
     # 计算 CD Gap (vs ground truth)
     gt_map = {
@@ -272,15 +191,13 @@ def visualize_by_category(
     save_path: str,
 ):
     """按类别可视化 pipeline 对比。"""
-    pipeline_types = ["ground_truth", "dat", "image"]
+    pipeline_types = ["ground_truth", "image"]
     pipeline_colors = {
         "ground_truth": "#2CA02C",
-        "dat": "#1F77B4",
         "image": "#E45756",
     }
     pipeline_labels = {
         "ground_truth": "Ground Truth",
-        "dat": ".dat Pipeline",
         "image": "Image Pipeline",
     }
 
@@ -311,17 +228,14 @@ def visualize_by_category(
 
     # 图2: CD Gap (vs Ground Truth)
     ax = axes[1]
-    gap_types = ["dat", "image"]
-    for i, pt in enumerate(gap_types):
-        gaps = []
-        for af in airfoils:
-            rs = [r for r in cat_results if r.airfoil_name == af and r.pipeline_type == pt]
-            gaps.append(rs[0].cd_gap if rs and rs[0].success else float("nan"))
-        offset = (i - 0.5) * 0.35
-        ax.bar(x + offset, gaps, 0.35, label=pt, color=pipeline_colors[pt], alpha=0.85)
+    gaps = []
+    for af in airfoils:
+        rs = [r for r in cat_results if r.airfoil_name == af and r.pipeline_type == "image"]
+        gaps.append(rs[0].cd_gap if rs and rs[0].success else float("nan"))
+    ax.bar(x, gaps, 0.5, label="image", color=pipeline_colors["image"], alpha=0.85)
     ax.axhline(y=0, color="black", linewidth=1, alpha=0.5)
     ax.set_ylabel("CD Gap vs Ground Truth")
-    ax.set_title("CD Gap (0 = perfect extraction)", fontweight="bold")
+    ax.set_title("Extraction Accuracy (0 = perfect)", fontweight="bold")
     ax.set_xticks(x)
     ax.set_xticklabels([n[:10] for n in airfoils], fontsize=6, rotation=45, ha="right")
     ax.legend(fontsize=7)
@@ -361,24 +275,21 @@ def visualize_summary(
     """汇总统计图: 各类别成功率、平均 CD Gap、平均时间。"""
     categories = ["Normal", "Medium", "Hard"]
     cat_airfoils = [normal_afs, medium_afs, hard_afs]
-    pipeline_types = ["ground_truth", "dat", "image"]
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     x = np.arange(len(categories))
-    n_p = len(pipeline_types)
-    width = 0.7 / n_p
-    colors = {"ground_truth": "#2CA02C", "dat": "#1F77B4", "image": "#E45756"}
 
     # 图1: 成功率
     ax = axes[0]
-    for i, pt in enumerate(pipeline_types):
+    for i, pt in enumerate(["ground_truth", "image"]):
         rates = []
         for afs in cat_airfoils:
             total = sum(1 for r in results if r.airfoil_name in afs and r.pipeline_type == pt)
             success = sum(1 for r in results if r.airfoil_name in afs and r.pipeline_type == pt and r.success)
             rates.append(success / total * 100 if total > 0 else 0)
-        offset = (i - (n_p - 1) / 2) * width
-        bars = ax.bar(x + offset, rates, width, label=pt, color=colors[pt], alpha=0.85)
+        offset = (i - 0.5) * 0.35
+        color = "#2CA02C" if pt == "ground_truth" else "#E45756"
+        bars = ax.bar(x + offset, rates, 0.35, label=pt, color=color, alpha=0.85)
         for bar, rate in zip(bars, rates):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
                     f"{rate:.0f}%", ha="center", va="bottom", fontsize=8, fontweight="bold")
@@ -390,15 +301,16 @@ def visualize_summary(
     ax.set_ylim(0, 110)
     ax.grid(axis="y", alpha=0.3)
 
-    # 图2: 平均 CD Gap
+    # 图2: 平均 CD Gap (image only)
     ax = axes[1]
-    for i, pt in enumerate(["dat", "image"]):
-        gaps = []
-        for afs in cat_airfoils:
-            rs = [r for r in results if r.airfoil_name in afs and r.pipeline_type == pt and r.success]
-            gaps.append(np.mean([r.cd_gap for r in rs]) if rs else 0)
-        offset = (i - 0.5) * 0.35
-        ax.bar(x + offset, gaps, 0.35, label=pt, color=colors[pt], alpha=0.85)
+    gaps = []
+    for afs in cat_airfoils:
+        rs = [r for r in results if r.airfoil_name in afs and r.pipeline_type == "image" and r.success]
+        gaps.append(np.mean([r.cd_gap for r in rs]) if rs else 0)
+    bars = ax.bar(x, gaps, 0.5, label="image", color="#E45756", alpha=0.85)
+    for bar, gap in zip(bars, gaps):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.0005,
+                f"{gap:.4f}", ha="center", va="bottom", fontsize=8, fontweight="bold")
     ax.axhline(y=0, color="black", linewidth=1, alpha=0.5)
     ax.set_ylabel("Mean CD Gap")
     ax.set_title("Extraction Accuracy (0 = perfect)", fontweight="bold")
@@ -409,13 +321,14 @@ def visualize_summary(
 
     # 图3: 平均时间
     ax = axes[2]
-    for i, pt in enumerate(pipeline_types):
+    for i, pt in enumerate(["ground_truth", "image"]):
         times = []
         for afs in cat_airfoils:
             rs = [r for r in results if r.airfoil_name in afs and r.pipeline_type == pt and r.success]
             times.append(np.mean([r.time for r in rs]) if rs else 0)
-        offset = (i - (n_p - 1) / 2) * width
-        ax.bar(x + offset, times, width, label=pt, color=colors[pt], alpha=0.85)
+        offset = (i - 0.5) * 0.35
+        color = "#2CA02C" if pt == "ground_truth" else "#E45756"
+        ax.bar(x + offset, times, 0.35, label=pt, color=color, alpha=0.85)
     ax.set_ylabel("Mean Time (s)")
     ax.set_title("End-to-End Time", fontweight="bold")
     ax.set_xticks(x)
@@ -461,17 +374,15 @@ def print_summary(results: list[PipelineResult], category: str, airfoils: list[s
     print(f"{category} ({len(airfoils)} airfoils)")
     print("=" * 80)
 
-    for pt in ["ground_truth", "dat", "image", "prompt"]:
-        rs = [r for r in results if r.pipeline_type == pt and r.airfoil_name in airfoils or r.pipeline_type == "prompt"]
+    for pt in ["ground_truth", "image"]:
+        rs = [r for r in results if r.pipeline_type == pt and r.airfoil_name in airfoils]
         rs_success = [r for r in rs if r.success]
-        rs_cat = [r for r in results if r.pipeline_type == pt and (r.airfoil_name in airfoils if pt != "prompt" else True)]
-        rs_cat_success = [r for r in rs_cat if r.success]
-        total = len([r for r in results if r.pipeline_type == pt and (r.airfoil_name in airfoils if pt != "prompt" else True)])
-        if rs_cat_success:
-            avg_cd = np.mean([r.cd for r in rs_cat_success])
-            avg_gap = np.mean([r.cd_gap for r in rs_cat_success])
-            avg_time = np.mean([r.time for r in rs_cat_success])
-            sr = len(rs_cat_success) / total * 100 if total > 0 else 0
+        total = len(rs)
+        if rs_success:
+            avg_cd = np.mean([r.cd for r in rs_success])
+            avg_gap = np.mean([r.cd_gap for r in rs_success])
+            avg_time = np.mean([r.time for r in rs_success])
+            sr = len(rs_success) / total * 100 if total > 0 else 0
             print(f"  {pt:<14} CD={avg_cd:.4f}  Gap={avg_gap:+.4f}  Time={avg_time:.1f}s  SR={sr:.0f}%")
         else:
             print(f"  {pt:<14} (no success)")
@@ -481,8 +392,6 @@ def print_summary(results: list[PipelineResult], category: str, airfoils: list[s
 
 
 def main():
-    import tempfile
-
     normal_afs, medium_afs, hard_afs = load_benchmark_airfoils()
     all_airfoils = normal_afs + medium_afs + hard_afs
 
@@ -490,13 +399,12 @@ def main():
     print("Pipeline Benchmark")
     print("=" * 80)
     print(f"Normal: {len(normal_afs)}, Medium: {len(medium_afs)}, Hard: {len(hard_afs)}")
-    print(f"总计: {len(all_airfoils)} 个翼型, {len(all_airfoils) * 3 + 1} 次优化")
+    print(f"总计: {len(all_airfoils)} 个翼型, {len(all_airfoils) * 2} 次优化")
     print()
 
     t0 = time.perf_counter()
 
-    with tempfile.TemporaryDirectory(prefix="piern_pipe_") as tmp_dir:
-        results = run_pipeline_benchmark(all_airfoils, Path(tmp_dir))
+    results = run_pipeline_benchmark(all_airfoils)
 
     # 按类别输出统计
     print_summary(results, "Normal", normal_afs)

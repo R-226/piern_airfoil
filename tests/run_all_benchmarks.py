@@ -106,7 +106,6 @@ def run_pipeline_benchmark():
         visualize_summary,
         export_csv,
     )
-    import tempfile
 
     normal_afs, medium_afs, hard_afs = load_benchmark_airfoils()
     all_afs = normal_afs + medium_afs + hard_afs
@@ -114,8 +113,7 @@ def run_pipeline_benchmark():
 
     t0 = time.perf_counter()
 
-    with tempfile.TemporaryDirectory(prefix="piern_pipe_") as tmp_dir:
-        results = run_pipeline(all_afs, Path(tmp_dir))
+    results = run_pipeline(all_afs)
 
     visualize_by_category(results, normal_afs, "Normal", str(RESULTS_DIR / "pipeline_normal.png"))
     visualize_by_category(results, medium_afs, "Medium", str(RESULTS_DIR / "pipeline_medium.png"))
