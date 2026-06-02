@@ -27,14 +27,15 @@ Optimized Airfoil
 ```bash
 git clone https://github.com/R-226/piern_airfoil.git
 cd piern_airfoil
-uv sync                          # install core deps
-uv pip install -e .              # editable install
+uv sync
+uv pip install -e .
+```
 
-# Optional: for LLM prompt extraction training
-uv sync --extra train
+Optional dependencies:
 
-# Optional: for Gradio web UI
-uv sync --extra ui
+```bash
+uv sync --extra train    # LLM prompt extraction training (torch)
+uv sync --extra ui       # Gradio web UI
 ```
 
 ## Quick Start
@@ -47,29 +48,19 @@ from piern_airfoil import AdaptiveHierarchicalOptimizer
 from piern.router import OptRouter
 import numpy as np
 
-# Define optimization problem
 CL_TARGETS = np.array([0.8, 1.0, 1.2, 1.4, 1.5, 1.6])
 CL_WEIGHTS = np.array([5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
 RE = 500e3 * (CL_TARGETS / 1.25) ** -0.5
 
-# Create optimizer with learned router
-router = OptRouter.from_mlp()  # or .from_trained() for threshold mode
+router = OptRouter.from_mlp()
 optimizer = AdaptiveHierarchicalOptimizer(
-    CL_targets=CL_TARGETS,
-    CL_weights=CL_WEIGHTS,
-    Re=RE,
-    mach=0.03,
-    router=router,
+    CL_targets=CL_TARGETS, CL_weights=CL_WEIGHTS,
+    Re=RE, mach=0.03, router=router,
 )
 
-# Optimize
 airfoil = asb.KulfanAirfoil("naca0012")
 result = optimizer.optimize(airfoil)
-
 print(f"Final CD: {result.final_cd:.6f}")
-print(f"Stages: {len(result.stages)}")
-for stage in result.stages:
-    print(f"  Stage {stage.stage}: {stage.n_active_weights}w -> CD={stage.cd:.6f}")
 ```
 
 ### Pipeline (Chinese prompt + image)
@@ -95,25 +86,42 @@ uv run python -m piern.view.app
 
 ```
 src/
-├── piern_airfoil/              # Core optimization engines
-│   ├── optimizer.py            # Baseline: single-stage 8-weight IPOPT
-│   ├── hierarchical.py         # Innovation: adaptive 4->8 weight expansion
-│   ├── eval.py                 # Shared weighted CD evaluation
-│   └── _legacy/                # Ablation baselines (DE, L-BFGS-B, early router)
+├── piern_airfoil/                  # Core optimization engines
+│   ├── optimizer.py                # Baseline: single-stage 8-weight IPOPT
+│   ├── hierarchical.py             # Core: adaptive 4->8 weight expansion
+│   ├── eval.py                     # Shared weighted CD evaluation (NeuralFoil)
+│   ├── xfoil_optimizer.py          # Classic baseline: XFoil + Differential Evolution
+│   └── _legacy/                    # Ablation baselines (DE, L-BFGS-B, early router)
 │
-├── piern/                      # Integration layer
-│   ├── router/                 # Fidelity routing
-│   │   ├── opt_router.py       # OptRouter: rule/threshold/mlp modes
-│   │   ├── mlp_router.py       # MLP router training (~1000 params)
-│   │   ├── train_threshold.py  # Grid search for optimal threshold
-│   │   └── trained/            # Saved model weights
-│   ├── prompt2data/            # Chinese NL -> structured parameters
-│   │   └── encoder_extractor.py # Regex + Transformer classifier
-│   ├── view/                   # Gradio web UI
-│   │   ├── app.py              # Interactive optimization interface
-│   │   └── extract.py          # Airfoil image contour extraction
-│   └── pipeline.py             # End-to-end orchestration
+├── piern/                          # Integration layer
+│   ├── router/                     # Fidelity routing
+│   │   ├── opt_router.py           # OptRouter: rule/threshold/mlp modes
+│   │   ├── mlp_router.py           # MLP router training (~1000 params)
+│   │   ├── train_threshold.py      # Grid search for optimal threshold
+│   │   └── trained/                # Saved model weights
+│   ├── prompt2data/                # Chinese NL -> structured parameters
+│   │   └── encoder_extractor.py    # Regex + Transformer classifier
+│   ├── view/                       # Gradio web UI
+│   │   ├── app.py                  # Interactive optimization interface
+│   │   └── extract.py              # Airfoil image contour extraction (edge detection)
+│   └── pipeline.py                 # End-to-end orchestration
+│
+tests/
+├── benchmark_router.py             # 5 methods x 105 airfoils comparison
+├── benchmark_pipeline.py           # Ground truth vs image extraction accuracy
+├── benchmark_ablation.py           # 4 ablations + sensitivity analysis
+└── run_all_benchmarks.py           # One-click benchmark orchestrator
 ```
+
+## Optimization Methods
+
+| Method | Description |
+|--------|-------------|
+| Baseline | Direct 8-weight IPOPT (single-stage) |
+| Rule | Hierarchical with fixed threshold (0.01) |
+| Threshold | Hierarchical with learned threshold (grid search) |
+| **PiERN Router** | Hierarchical with learned MLP policy (~1000 params) |
+| XFoil+DE | Classic: Differential Evolution + XFoil black-box evaluation |
 
 ## OptRouter Modes
 
@@ -123,42 +131,43 @@ src/
 | `threshold` | Learned threshold via grid search | `train_threshold.py` |
 | `mlp` | Learned MLP policy (~1000 params) | `mlp_router.py` |
 
-## Benchmark Results
+## Benchmark Suite
 
-### Normal Cases (6 airfoils)
-PiERN achieves best CD (0.427463) while being 29-33% faster than rule/threshold methods.
+Three benchmarks covering optimization quality, extraction accuracy, and design choices:
 
-| Method | Avg CD | Avg Time | Avg Stages |
-|--------|--------|----------|------------|
-| Baseline (8w IPOPT) | 0.428923 | 2.1s | 1.0 |
-| Rule (fixed threshold) | 0.427871 | 10.4s | 5.5 |
-| Threshold (learned) | 0.429097 | 11.1s | 6.0 |
-| **PiERN Router** | **0.427463** | **7.4s** | **3.7** |
+```bash
+uv run python tests/run_all_benchmarks.py
+```
 
-### Hard Cases (4 airfoils)
-Baseline fails completely (0% success), PiERN rescues 75% of cases.
+### Router Benchmark
+Compares 5 optimization methods on 105 airfoils (Normal/Medium/Hard).
 
-| Method | Success Rate | Avg CD |
-|--------|-------------|--------|
-| Baseline | 0/4 (0%) | 1.490 |
-| Rule | 3/4 (75%) | 0.461 |
-| Threshold | 3/4 (75%) | 0.461 |
-| **PiERN** | **3/4 (75%)** | **0.460** |
+Output: `benchmark_stats.csv`, `table_router_full.csv`, `table_router_latex.tex`, `table_significance.csv`, plus 14 figures (per-category, distribution, difficulty-improvement, method comparison).
+
+### Pipeline Benchmark
+Compares ground truth vs image-based extraction accuracy.
+
+Output: `pipeline_benchmark.csv`, plus 4 figures with decomposition metrics (extraction time, optimization time, Kulfan fit error).
+
+### Ablation Study
+4 experiments + sensitivity analysis validating design choices (hierarchical vs direct, router effect, starting dimension, per-stage contribution).
+
+Output: `ablation.csv`, plus 6 figures.
 
 ## Tests
 
 ```bash
-uv run pytest tests/ -v                      # all tests
-uv run pytest tests/test_pipeline.py -v      # pipeline integration
-uv run pytest tests/ -k "test_router"        # router unit tests
+uv run pytest tests/ -v
+uv run pytest tests/test_pipeline.py -v
+uv run pytest tests/ -k "test_router"
 ```
 
 ## Development
 
 ```bash
-uv run black .                    # format
-uv run ruff check src/            # lint
-uv run mypy src/                  # type check
+uv run black .
+uv run ruff check src/
+uv run mypy src/
 ```
 
 ## License

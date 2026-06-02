@@ -2,10 +2,11 @@
 Router Benchmark — 优化策略对比。
 
 对比方法:
-  - Baseline:    NeuralOptimizer 全 8 权重 IPOPT
-  - Rule:        固定阈值 0.01 的层次化路由
-  - Threshold:   网格搜索学习的最优阈值
-  - PiERN Router: 基于历史信息的学习型路由
+  - Baseline:     NeuralOptimizer 全 8 权重 IPOPT
+  - Rule:         固定阈值 0.01 的层次化路由
+  - Threshold:    网格搜索学习的最优阈值
+  - PiERN Router: 基于 MLP 的学习型路由
+  - XFoil+DE:     经典基线 — 差分进化 + XFoil 黑箱评估
 
 场景:
   - Normal: 常规翼型 (30)
@@ -15,9 +16,17 @@ Router Benchmark — 优化策略对比。
 翼型从 data/benchmark_airfoils.json 加载 (固定集合, 基于 brentq 初始 CD 过滤)。
 
 输出:
-  results/benchmark_normal.png — 常规场景对比
-  results/benchmark_hard.png   — 困难场景对比
-  results/benchmark_stats.csv  — 原始数据 CSV
+  results/benchmark_stats.csv            — 原始数据 CSV
+  results/table_router_full.csv          — 完整结果表 (类别×方法)
+  results/table_router_latex.tex         — LaTeX 格式结果表
+  results/table_significance.csv         — 统计显著性检验 (Mann-Whitney U)
+  results/benchmark_normal.png           — 常规场景对比
+  results/benchmark_medium.png           — 中等场景对比
+  results/benchmark_hard.png             — 困难场景对比
+  results/benchmark_summary.png          — 跨类别汇总
+  results/benchmark_method_comparison.png — NeuralFoil vs XFoil+DE
+  results/benchmark_dist_*.png           — CD 分布箱线图 (4张)
+  results/benchmark_diff_*.png           — 难度-改善散点图 (4张)
 """
 
 from __future__ import annotations

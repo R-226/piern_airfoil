@@ -7,9 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 PIERN-Airfoil (Physics-Infused Expert Reasoning Network) is a unified airfoil shape optimization framework with **Hierarchical CST Parameterization** as the core innovation:
 
 - **CasADi+IPOPT Baseline**: gradient-based via Aerosandbox KulfanAirfoil + IPOPT (~5s, high accuracy)
-- **Hierarchical CST**: two-stage pipeline with different parameterization dimensions
+- **Hierarchical CST**: adaptive multi-stage pipeline using CST parameterization dimension as the fidelity axis
   - Stage 1: Low-dimensional search (4 CST weights/edge) → fast feasible solution
-  - Stage 2: High-dimensional refinement (8 CST weights/edge) → shape detail optimization
+  - Stage 2: Medium refinement (6 CST weights/edge) → mid-chord detail
+  - Stage 3: Full fidelity (8 CST weights/edge) → shape detail optimization
+  - OptRouter (rule/threshold/mlp) decides when to expand dimensions
+- **XFoil+DE Baseline**: classic black-box optimization using Differential Evolution + XFoil evaluation
 
 The project also includes an LLM-powered system that extracts structured optimization parameters from Chinese natural-language prompts.
 
@@ -42,7 +45,10 @@ uv run python -m piern.view.app                          # Gradio web UI
 uv run python -m piern.prompt2data.encoder_extractor     # prompt2data training
 uv run python -m piern.router.train_threshold            # A1: learn optimal threshold
 uv run python -m piern.router.mlp_router                 # A2: train MLP router
-uv run python tests/benchmark_router.py                  # dual-scene benchmark
+uv run python tests/benchmark_router.py                  # router benchmark (5 methods x 105 airfoils)
+uv run python tests/benchmark_pipeline.py                # pipeline benchmark (ground truth vs image)
+uv run python tests/benchmark_ablation.py                # ablation study (4 experiments + sensitivity)
+uv run python tests/run_all_benchmarks.py                # run all benchmarks (one-click)
 ```
 
 ## Architecture
@@ -52,8 +58,9 @@ The codebase has two top-level packages under `src/`:
 ### `piern_airfoil/` — Core optimization engines
 
 - **`optimizer.py`**: `NeuralOptimizer` wraps Aerosandbox's `Opti` + `KulfanAirfoil` + NeuralFoil. Minimizes weighted CD subject to constraints (CL, CM, thickness, TE angle, LE radius, wiggliness). Supports warm-starting via IPOPT.
-- **`hierarchical.py`**: **Core innovation** — `AdaptiveHierarchicalOptimizer` uses CST parameterization dimension as the fidelity axis. Starts from low-dimensional (4 weights/edge), adaptively expands to 8 weights/edge based on convergence history. Uses `OptRouter` for routing decisions.
+- **`hierarchical.py`**: **Core innovation** — `AdaptiveHierarchicalOptimizer` uses CST parameterization dimension as the fidelity axis. Starts from low-dimensional (4 weights/edge), adaptively expands to 6 and then 8 weights/edge based on convergence history. Uses `OptRouter` for routing decisions.
 - **`eval.py`**: Shared `evaluate_weighted_cd()` — single-point NeuralFoil CD evaluation used across optimizer, pipeline, and router training.
+- **`xfoil_optimizer.py`**: Classic baseline — XFoil + Differential Evolution (scipy). Black-box optimization using XFoil as the objective evaluator. Used as comparison baseline in benchmarks.
 - **`_legacy/`**: Earlier exploration code kept as **baseline comparisons for ablation studies**:
   - `global_optimizer.py`: Differential Evolution (DE) — global search baseline
   - `gradient_optimizer.py`: L-BFGS-B — local gradient baseline
@@ -68,7 +75,7 @@ The codebase has two top-level packages under `src/`:
   - **`mlp_router.py`**: MLP router training pipeline
   - **`trained/`**: Saved model weights (optimal_threshold.json, mlp_router.json)
 - **`prompt2data/`**: Extracts structured params (Mach, CL, weights, constraints) from Chinese text. Active model: `encoder_extractor.py` (regex number extraction + Transformer classifier, 18 output classes, ~3.3M params). `deprecated/` contains earlier MLP approaches kept for reference.
-- **`view/`**: Gradio web UI (`app.py`) — accepts Chinese prompt + airfoil image, runs Baseline + PiERN optimization in parallel, compares results. `extract.py` detects blue contour pixels from images. `verify.py` is a standalone contour extraction verification tool.
+- **`view/`**: Gradio web UI (`app.py`) — accepts Chinese prompt + airfoil image, runs Baseline + PiERN optimization in parallel, compares results. `extract.py` supports color-based and edge-based (Sobel) airfoil contour extraction from images.
 
 ### Data flow
 

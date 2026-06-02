@@ -1,19 +1,24 @@
 """
-全流程 Pipeline Benchmark — 翼型提取精度对比。
+Pipeline Benchmark — 翼型提取精度对比。
 
 对比:
   1. Ground Truth: 直接从 aerosandbox 加载 KulfanAirfoil
-  2. Image Pipeline: 预渲染图片 → edge detection → 拟合 → 优化
+  2. Image Pipeline: 预渲染图片 → edge detection → Kulfan 拟合 → 优化
+
+分解指标:
+  - extraction_time: 轮廓提取耗时
+  - optimization_time: 优化耗时
+  - kulfan_fit_error: 提取轮廓 vs Kulfan 拟合轮廓的 RMS 距离
 
 翼型来源: data/benchmark_airfoils.json (固定集合)
 图片来源: data/benchmark_images/ (预渲染)
 
 输出:
-  results/pipeline_normal.png   — 常规翼型 pipeline 对比
-  results/pipeline_medium.png   — 中等翼型 pipeline 对比
-  results/pipeline_hard.png     — 困难翼型 pipeline 对比
-  results/pipeline_summary.png  — 汇总图
-  results/pipeline_benchmark.csv — 原始数据
+  results/pipeline_normal.png    — 常规翼型 pipeline 对比
+  results/pipeline_medium.png    — 中等翼型 pipeline 对比
+  results/pipeline_hard.png      — 困难翼型 pipeline 对比
+  results/pipeline_summary.png   — 汇总图
+  results/pipeline_benchmark.csv — 原始数据 (含分解指标)
 """
 
 from __future__ import annotations
