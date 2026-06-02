@@ -21,7 +21,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,9 +73,27 @@ class PipelineResult:
     time: float
     success: bool
     cd_gap: float = 0.0
+    extraction_time: float = 0.0  # 轮廓提取耗时
+    optimization_time: float = 0.0  # 优化耗时
+    kulfan_fit_error: float = 0.0  # Kulfan 拟合 RMS 误差
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
+
+
+def _suppress_stdout():
+    """Suppress stdout by redirecting fd 1 (fd-based, safe for exceptions)."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stdout = os.dup(1)
+    os.dup2(devnull, 1)
+    os.close(devnull)
+    return old_stdout
+
+
+def _restore_stdout(old_stdout: int):
+    """Restore stdout from saved fd."""
+    os.dup2(old_stdout, 1)
+    os.close(old_stdout)
 
 
 def optimize_airfoil(airfoil) -> tuple[float, float]:
@@ -94,24 +111,55 @@ def optimize_airfoil(airfoil) -> tuple[float, float]:
         router=router,
     )
 
-    old_stdout = sys.stdout
-    sys.stdout = open(os.devnull, "w")
+    old_stdout = _suppress_stdout()
     t0 = time.perf_counter()
     try:
         result = optimizer.optimize(airfoil)
         elapsed = time.perf_counter() - t0
     except Exception:
         elapsed = time.perf_counter() - t0
-        sys.stdout.close()
-        sys.stdout = old_stdout
+        _restore_stdout(old_stdout)
         raise
-    sys.stdout.close()
-    sys.stdout = old_stdout
+    _restore_stdout(old_stdout)
     return result.final_cd, elapsed
 
 
 def _contour_to_kulfan(contour) -> asb.KulfanAirfoil:
     return asb.Airfoil(coordinates=contour.to_selig_coords()).to_kulfan_airfoil()
+
+
+def _kulfan_fit_rms(contour, kaf: asb.KulfanAirfoil) -> float:
+    """提取轮廓 vs Kulfan 拟合轮廓的 RMS 距离。"""
+    from scipy.interpolate import interp1d
+
+    # 提取轮廓 (Selig 格式)
+    extracted = contour.to_selig_coords()  # (M, 2)
+
+    # Kulfan 拟合轮廓
+    fitted = kaf.coordinates  # (K, 2)
+
+    # 用弧长参数化做点对点匹配
+    def _arc_length_param(coords):
+        dx = np.diff(coords[:, 0])
+        dy = np.diff(coords[:, 1])
+        ds = np.sqrt(dx**2 + dy**2)
+        s = np.concatenate([[0], np.cumsum(ds)])
+        return s / s[-1] if s[-1] > 0 else s
+
+    s_ext = _arc_length_param(extracted)
+    s_fit = _arc_length_param(fitted)
+
+    # 在 [0, 1] 上均匀采样
+    n_sample = 200
+    t = np.linspace(0, 1, n_sample)
+
+    ext_x = interp1d(s_ext, extracted[:, 0], kind="linear")(t)
+    ext_y = interp1d(s_ext, extracted[:, 1], kind="linear")(t)
+    fit_x = interp1d(s_fit, fitted[:, 0], kind="linear")(t)
+    fit_y = interp1d(s_fit, fitted[:, 1], kind="linear")(t)
+
+    dist = np.sqrt((ext_x - fit_x)**2 + (ext_y - fit_y)**2)
+    return float(np.sqrt(np.mean(dist**2)))
 
 
 # ── Pipeline 测试 ─────────────────────────────────────────────────────
@@ -134,12 +182,29 @@ def test_image_pipeline(name: str) -> PipelineResult:
         if not img_path.exists():
             return PipelineResult(name, "image", float("inf"), 0, False)
 
+        # Step 1: 轮廓提取
         t0 = time.perf_counter()
         contour = extract_airfoil(img_path, method="edge")
+        extraction_time = time.perf_counter() - t0
+
+        # Step 2: Kulfan 拟合
+        t1 = time.perf_counter()
         kaf = _contour_to_kulfan(contour)
-        cd, _ = optimize_airfoil(kaf)
-        total_time = time.perf_counter() - t0
-        return PipelineResult(name, "image", cd, total_time, True)
+        fit_time = time.perf_counter() - t1
+
+        # Kulfan 拟合误差
+        fit_error = _kulfan_fit_rms(contour, kaf)
+
+        # Step 3: 优化
+        cd, optimization_time = optimize_airfoil(kaf)
+
+        total_time = extraction_time + fit_time + optimization_time
+        return PipelineResult(
+            name, "image", cd, total_time, True,
+            extraction_time=extraction_time,
+            optimization_time=optimization_time,
+            kulfan_fit_error=fit_error,
+        )
     except Exception:
         return PipelineResult(name, "image", float("inf"), 0, False)
 
@@ -354,13 +419,19 @@ def export_csv(
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     with open(save_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["airfoil", "pipeline_type", "cd", "cd_gap", "time", "success"])
+        writer.writerow([
+            "airfoil", "pipeline_type", "cd", "cd_gap", "time",
+            "extraction_time", "optimization_time", "kulfan_fit_error", "success",
+        ])
         for r in results:
             writer.writerow([
                 r.airfoil_name, r.pipeline_type,
                 f"{r.cd:.6f}" if r.success else "inf",
                 f"{r.cd_gap:.6f}" if r.success else "inf",
                 f"{r.time:.3f}",
+                f"{r.extraction_time:.3f}" if r.success else "0",
+                f"{r.optimization_time:.3f}" if r.success else "0",
+                f"{r.kulfan_fit_error:.6f}" if r.success else "inf",
                 r.success,
             ])
     print(f"CSV 已保存: {save_path}")
@@ -370,9 +441,9 @@ def export_csv(
 
 
 def print_summary(results: list[PipelineResult], category: str, airfoils: list[str]):
-    print(f"\n{'='*80}")
+    print(f"\n{'='*100}")
     print(f"{category} ({len(airfoils)} airfoils)")
-    print("=" * 80)
+    print("=" * 100)
 
     for pt in ["ground_truth", "image"]:
         rs = [r for r in results if r.pipeline_type == pt and r.airfoil_name in airfoils]
@@ -384,6 +455,13 @@ def print_summary(results: list[PipelineResult], category: str, airfoils: list[s
             avg_time = np.mean([r.time for r in rs_success])
             sr = len(rs_success) / total * 100 if total > 0 else 0
             print(f"  {pt:<14} CD={avg_cd:.4f}  Gap={avg_gap:+.4f}  Time={avg_time:.1f}s  SR={sr:.0f}%")
+
+            # image pipeline 额外显示分解指标
+            if pt == "image":
+                avg_extract = np.mean([r.extraction_time for r in rs_success])
+                avg_opt = np.mean([r.optimization_time for r in rs_success])
+                avg_fit_err = np.mean([r.kulfan_fit_error for r in rs_success])
+                print(f"  {'':<14} Extract={avg_extract:.2f}s  Opt={avg_opt:.1f}s  FitErr={avg_fit_err:.4f}")
         else:
             print(f"  {pt:<14} (no success)")
 

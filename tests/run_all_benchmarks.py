@@ -72,6 +72,7 @@ def run_router_benchmark():
         visualize_summary,
         visualize_method_comparison,
         visualize_distributions,
+        visualize_difficulty_improvement,
         run_significance_tests,
         print_significance_tests,
         generate_results_table,
@@ -107,6 +108,12 @@ def run_router_benchmark():
     visualize_distributions(all_stats, medium_afs, "Medium", str(RESULTS_DIR / "benchmark_dist_medium.png"))
     visualize_distributions(all_stats, hard_afs, "Hard", str(RESULTS_DIR / "benchmark_dist_hard.png"))
     visualize_distributions(all_stats, all_afs_combined, "All", str(RESULTS_DIR / "benchmark_dist_all.png"))
+
+    # 难度-改善散点图
+    visualize_difficulty_improvement(all_stats, normal_afs, "Normal", str(RESULTS_DIR / "benchmark_diff_normal.png"))
+    visualize_difficulty_improvement(all_stats, medium_afs, "Medium", str(RESULTS_DIR / "benchmark_diff_medium.png"))
+    visualize_difficulty_improvement(all_stats, hard_afs, "Hard", str(RESULTS_DIR / "benchmark_diff_hard.png"))
+    visualize_difficulty_improvement(all_stats, all_afs_combined, "All", str(RESULTS_DIR / "benchmark_diff_all.png"))
 
     # 统计显著性检验
     sig_all = run_significance_tests(all_stats, all_afs_combined, "All")

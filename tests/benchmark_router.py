@@ -1384,6 +1384,121 @@ def visualize_distributions(
     print(f"Distribution figure saved: {save_path}")
 
 
+# ── 难度-改善散点图 ────────────────────────────────────────────────────
+
+
+def visualize_difficulty_improvement(
+    all_stats: list[StatsResult],
+    airfoils: list[str],
+    category: str = "All",
+    save_path: str = "results/benchmark_difficulty.png",
+):
+    """初始 CD (难度) vs CD 改善率散点图。
+
+    Layout (1x2):
+      (a) Per-airfoil scatter — x: initial CD, y: improvement %
+      (b) Binned mean improvement — grouped by difficulty quartiles
+    """
+    methods = ["rule", "threshold", "mlp", "xfoil_de"]
+
+    fig, axes = plt.subplots(
+        1, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 0.9),
+        gridspec_kw=dict(wspace=0.35),
+    )
+
+    # ── (a) Per-airfoil scatter ──
+    ax = axes[0]
+    for m in methods:
+        x_vals, y_vals = [], []
+        for af in airfoils:
+            init = _get_stats(all_stats, "initial", af)
+            meth = _get_stats(all_stats, m, af)
+            if init and meth and init.cd_mean > 0 and meth.cd_mean < 1e10:
+                x_vals.append(init.cd_mean)
+                y_vals.append((init.cd_mean - meth.cd_mean) / init.cd_mean * 100)
+
+        if x_vals:
+            ax.scatter(
+                x_vals, y_vals,
+                s=25, alpha=0.5, color=_PALETTE.get(m, "#888"),
+                label=METHOD_LABELS[m], edgecolors="none", zorder=3,
+            )
+            # LOWESS 趋势线
+            try:
+                from statsmodels.nonparametric.smoothers_lowess import lowess
+                x_arr, y_arr = np.array(x_vals), np.array(y_vals)
+                order = np.argsort(x_arr)
+                smoothed = lowess(y_arr[order], x_arr[order], frac=0.6, return_sorted=True)
+                ax.plot(
+                    smoothed[:, 0], smoothed[:, 1],
+                    color=_PALETTE.get(m, "#888"), linewidth=1.5, alpha=0.8, zorder=4,
+                )
+            except ImportError:
+                pass
+
+    ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.5, linestyle="--")
+    ax.set_xscale("log")
+    _style_axes(ax, "Initial CD (airfoil difficulty)", "CD Improvement over Baseline (%)",
+                f"(a) Difficulty vs Improvement — {category}")
+    ax.legend(fontsize=6, frameon=False)
+
+    # ── (b) Binned mean improvement ──
+    ax = axes[1]
+    # 按初始 CD 分四分位
+    init_cds = []
+    for af in airfoils:
+        s = _get_stats(all_stats, "initial", af)
+        if s and s.cd_mean > 0:
+            init_cds.append((af, s.cd_mean))
+    if not init_cds:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+    else:
+        init_cds.sort(key=lambda x: x[1])
+        n = len(init_cds)
+        quartiles = [
+            init_cds[:n//4],
+            init_cds[n//4:n//2],
+            init_cds[n//2:3*n//4],
+            init_cds[3*n//4:],
+        ]
+        q_labels = ["Q1\n(easiest)", "Q2", "Q3", "Q4\n(hardest)"]
+        x = np.arange(4)
+        bar_w = 0.18
+
+        for i, m in enumerate(methods):
+            vals = []
+            for q_afs in quartiles:
+                imps = []
+                for af, _ in q_afs:
+                    init = _get_stats(all_stats, "initial", af)
+                    meth = _get_stats(all_stats, m, af)
+                    if init and meth and init.cd_mean > 0 and meth.cd_mean < 1e10:
+                        imps.append((init.cd_mean - meth.cd_mean) / init.cd_mean * 100)
+                vals.append(np.mean(imps) if imps else 0)
+            offset = (i - 1.5) * bar_w
+            bars = ax.bar(
+                x + offset, vals, bar_w,
+                label=METHOD_LABELS[m], color=_PALETTE.get(m, "#888"),
+                edgecolor="white", linewidth=0.3,
+            )
+            _annotate_bars(ax, bars, vals, suffix="%", offset_ratio=0.04)
+
+        ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.5, linestyle="--")
+        ax.set_xticks(x)
+        ax.set_xticklabels(q_labels, fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT)
+        _style_axes(ax, "Difficulty Quartile", "Mean CD Improvement (%)",
+                    f"(b) Improvement by Difficulty — {category}")
+        ax.legend(fontsize=6, frameon=False)
+
+    fig.suptitle(
+        f"Difficulty vs Improvement — {category} ({len(airfoils)} airfoils)",
+        fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=1.02,
+    )
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close()
+    print(f"Difficulty-improvement figure saved: {save_path}")
+
+
 # ── 主函数 ──────────────────────────────────────────────────────────────
 
 
@@ -1435,6 +1550,12 @@ def main():
     visualize_distributions(all_stats_combined, medium_afs, "Medium", "results/benchmark_dist_medium.png")
     visualize_distributions(all_stats_combined, hard_afs, "Hard", "results/benchmark_dist_hard.png")
     visualize_distributions(all_stats_combined, all_afs_combined, "All", "results/benchmark_dist_all.png")
+
+    # 难度-改善散点图
+    visualize_difficulty_improvement(all_stats_combined, normal_afs, "Normal", "results/benchmark_diff_normal.png")
+    visualize_difficulty_improvement(all_stats_combined, medium_afs, "Medium", "results/benchmark_diff_medium.png")
+    visualize_difficulty_improvement(all_stats_combined, hard_afs, "Hard", "results/benchmark_diff_hard.png")
+    visualize_difficulty_improvement(all_stats_combined, all_afs_combined, "All", "results/benchmark_diff_all.png")
 
     # ── 统计显著性检验 ──
     all_stats = normal_stats + medium_stats + hard_stats
