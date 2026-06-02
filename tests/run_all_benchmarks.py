@@ -13,6 +13,13 @@
     ├── benchmark_hard.png             — Router: 困难翼型对比
     ├── benchmark_summary.png          — Router: 汇总图
     ├── benchmark_method_comparison.png — NeuralFoil vs XFoil+DE 对比
+    ├── benchmark_dist_normal.png      — Router: 常规翼型 CD 分布
+    ├── benchmark_dist_medium.png      — Router: 中等翼型 CD 分布
+    ├── benchmark_dist_hard.png        — Router: 困难翼型 CD 分布
+    ├── benchmark_dist_all.png         — Router: 全部翼型 CD 分布
+    ├── table_router_full.csv          — 完整结果表 (类别×方法)
+    ├── table_router_latex.tex         — LaTeX 格式结果表
+    ├── table_significance.csv         — 统计显著性检验结果
     ├── pipeline_benchmark.csv         — Pipeline benchmark 原始数据
     ├── pipeline_normal.png            — Pipeline: 常规翼型对比
     ├── pipeline_medium.png            — Pipeline: 中等翼型对比
@@ -64,6 +71,10 @@ def run_router_benchmark():
         visualize_hard,
         visualize_summary,
         visualize_method_comparison,
+        visualize_distributions,
+        run_significance_tests,
+        print_significance_tests,
+        generate_results_table,
         export_csv,
     )
 
@@ -90,6 +101,19 @@ def run_router_benchmark():
     all_stats = normal_stats + medium_stats + hard_stats
     all_afs_combined = normal_afs + medium_afs + hard_afs
     visualize_method_comparison(all_stats, all_afs_combined)
+
+    # 分布可视化
+    visualize_distributions(all_stats, normal_afs, "Normal", str(RESULTS_DIR / "benchmark_dist_normal.png"))
+    visualize_distributions(all_stats, medium_afs, "Medium", str(RESULTS_DIR / "benchmark_dist_medium.png"))
+    visualize_distributions(all_stats, hard_afs, "Hard", str(RESULTS_DIR / "benchmark_dist_hard.png"))
+    visualize_distributions(all_stats, all_afs_combined, "All", str(RESULTS_DIR / "benchmark_dist_all.png"))
+
+    # 统计显著性检验
+    sig_all = run_significance_tests(all_stats, all_afs_combined, "All")
+    print_significance_tests(sig_all, "All")
+
+    # 综合结果表
+    generate_results_table(all_stats, normal_afs, medium_afs, hard_afs, sig_all, save_dir=str(RESULTS_DIR))
 
     export_csv(all_stats)
     elapsed = time.perf_counter() - t0
