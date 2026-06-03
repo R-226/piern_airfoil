@@ -117,30 +117,26 @@ class AdaptiveHierarchicalOptimizer:
         initial_lower = airfoil.lower_weights
 
         # 根据n_active决定哪些权重可优化
-        upper_vars = []
-        lower_vars = []
-        upper_fixed = []
-        lower_fixed = []
-
-        for i in range(8):
-            if i < n_active:
-                # 可优化
-                init_u = initial_weights[0][i] if initial_weights else initial_upper[i]
-                init_l = initial_weights[1][i] if initial_weights else initial_lower[i]
-                upper_vars.append(opti.variable(init_guess=float(init_u), lower_bound=-0.25, upper_bound=0.5))
-                lower_vars.append(opti.variable(init_guess=float(init_l), lower_bound=-0.5, upper_bound=0.25))
-            else:
-                # 固定
-                upper_fixed.append(float(initial_upper[i]))
-                lower_fixed.append(float(initial_lower[i]))
-
-        # 拼接权重
-        if upper_fixed:
-            upper_weights = casadi.vertcat(*upper_vars, *upper_fixed)
-            lower_weights = casadi.vertcat(*lower_vars, *lower_fixed)
+        if n_active >= 8:
+            # 全部权重可优化 — 直接用数组创建变量（vertcat 方式会导致 IPOPT 不收敛）
+            upper_weights = opti.variable(
+                init_guess=initial_weights[0] if initial_weights else initial_upper,
+                lower_bound=-0.25, upper_bound=0.5,
+            )
+            lower_weights = opti.variable(
+                init_guess=initial_weights[1] if initial_weights else initial_lower,
+                lower_bound=-0.5, upper_bound=0.25,
+            )
         else:
-            upper_weights = casadi.vertcat(*upper_vars)
-            lower_weights = casadi.vertcat(*lower_vars)
+            # 部分权重可优化，部分固定
+            init_u = np.array([initial_weights[0][i] if initial_weights else initial_upper[i] for i in range(n_active)])
+            init_l = np.array([initial_weights[1][i] if initial_weights else initial_lower[i] for i in range(n_active)])
+            upper_active = opti.variable(init_guess=init_u, lower_bound=-0.25, upper_bound=0.5)
+            lower_active = opti.variable(init_guess=init_l, lower_bound=-0.5, upper_bound=0.25)
+            upper_fixed = initial_upper[n_active:]
+            lower_fixed = initial_lower[n_active:]
+            upper_weights = casadi.vertcat(upper_active, upper_fixed)
+            lower_weights = casadi.vertcat(lower_active, lower_fixed)
 
         optimized_airfoil = asb.KulfanAirfoil(
             name="Optimized",
@@ -185,15 +181,24 @@ class AdaptiveHierarchicalOptimizer:
 
         sol = opti.solve(
             behavior_on_failure="return_last",
-            options={"ipopt.mu_strategy": "monotone", "ipopt.start_with_resto": "yes"},
+            options={
+                "ipopt.mu_strategy": "monotone",
+                "ipopt.start_with_resto": "yes",
+                "ipopt.max_iter": 200,
+            },
         )
+
+        # 检查是否因迭代上限未收敛
+        if sol.stats()["return_status"] == "Maximum_Iterations_Exceeded":
+            raise ValueError(
+                f"IPOPT hit iteration limit (200) with n_active={n_active}"
+            )
+
         result_airfoil = sol(optimized_airfoil)
 
         # 提取优化后的权重
-        result_upper = np.array([float(sol(upper_vars[i])) for i in range(n_active)] +
-                               [upper_fixed[i] for i in range(8 - n_active)])
-        result_lower = np.array([float(sol(lower_vars[i])) for i in range(n_active)] +
-                               [lower_fixed[i] for i in range(8 - n_active)])
+        result_upper = np.array(sol(upper_weights)).flatten()
+        result_lower = np.array(sol(lower_weights)).flatten()
 
         return result_airfoil, (result_upper, result_lower)
 
@@ -254,14 +259,23 @@ class AdaptiveHierarchicalOptimizer:
         else:
             return new_n, reason
 
-    def optimize(self, initial_airfoil) -> HierarchicalResult:
+    def optimize(self, initial_airfoil, verbose: bool | None = None) -> HierarchicalResult:
         """
         运行自适应分层CST优化。
+
+        Args:
+            initial_airfoil: 初始翼型
+            verbose: 如果为 True，打印每个阶段的详细计时。
+                     None 时检查 PIERN_VERBOSE 环境变量。
 
         Returns:
             HierarchicalResult 包含完整优化历史
         """
+        import os
         import time
+
+        if verbose is None:
+            verbose = os.environ.get("PIERN_VERBOSE", "0") == "1"
 
         t0 = time.perf_counter()
 
@@ -272,7 +286,10 @@ class AdaptiveHierarchicalOptimizer:
         n_active = self.start_weights
 
         # 初始评估
+        t_eval0 = time.perf_counter()
         init_cd = self._evaluate_cd(initial_airfoil)
+        if verbose:
+            print(f"    [timing] init_eval: {time.perf_counter()-t_eval0:.3f}s")
 
         max_stages = 6  # 最多6个阶段
         for stage_idx in range(max_stages):
@@ -281,22 +298,30 @@ class AdaptiveHierarchicalOptimizer:
                 n_active = 8
 
             # 运行当前阶段 (低维度失败时 fallback 到 8 权重)
+            t_stage = time.perf_counter()
             try:
                 result_airfoil, result_weights = self._run_stage(
                     current_airfoil, n_active, current_weights
                 )
             except (ValueError, RuntimeError) as e:
                 if n_active < 8:
-                    # 低维度约束不可行，直接用 8 权重
+                    # 低维度约束不可行，用原始翼型权重做初始点 fallback 到 8 权重
+                    orig_weights = (initial_airfoil.upper_weights, initial_airfoil.lower_weights)
                     result_airfoil, result_weights = self._run_stage(
-                        current_airfoil, 8, current_weights
+                        initial_airfoil, 8, orig_weights
                     )
                     n_active = 8
                 else:
                     raise
+            stage_time = time.perf_counter() - t_stage
 
             # 评估结果
+            t_eval = time.perf_counter()
             cd = self._evaluate_cd(result_airfoil)
+            eval_time = time.perf_counter() - t_eval
+
+            if verbose:
+                print(f"    [timing] stage {stage_idx+1}: ipopt={stage_time:.3f}s eval={eval_time:.3f}s n_active={n_active}")
 
             # 记录阶段结果
             stage_result = StageResult(

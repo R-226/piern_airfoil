@@ -88,6 +88,8 @@ def _xfoil_objective(
 
             return float(np.mean(np.array(cd_values) * CL_weights))
 
+    except FileNotFoundError:
+        raise  # xfoil 缺失时向上抛出，不要静默
     except Exception:
         return 1e6
 
@@ -107,7 +109,7 @@ def xfoil_optimize(
         airfoil_name: 初始翼型名称 (用于获取初始参数)。
         CL_targets: 目标 CL 值。
         Re: 雷诺数。
-        CL_weights: CL 权重。
+        CL_weights: CL 权资。
         mach: 马赫数。
         maxiter: DE 最大迭代数。
         popsize: 种群大小。
@@ -116,7 +118,14 @@ def xfoil_optimize(
         XFOilOptResult 包含最终 CD、耗时、成功状态。
     """
     import aerosandbox as asb
-    from piern_airfoil.xfoil_baseline import xfoil_cd
+    from piern_airfoil.xfoil_baseline import xfoil_cd, XFOIL_BIN
+
+    # 预检查: XFoil binary 是否存在
+    if not Path(XFOIL_BIN).exists():
+        raise FileNotFoundError(
+            f"XFoil binary not found at {XFOIL_BIN}. "
+            "Install XFoil or set the correct path in xfoil_baseline.XFOIL_BIN."
+        )
 
     af_init = asb.KulfanAirfoil(airfoil_name)
     initial_cd = xfoil_cd(airfoil_name, CL_targets, Re, CL_weights, mach)

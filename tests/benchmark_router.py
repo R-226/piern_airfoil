@@ -224,7 +224,7 @@ def run_once(airfoil_name: str, method: str, initial_cd: float = 0.0) -> RunResu
             from piern_airfoil.xfoil_optimizer import xfoil_optimize
             result = xfoil_optimize(
                 airfoil_name, CL_TARGETS, RE, CL_WEIGHTS, MACH,
-                maxiter=8, popsize=4,  # 小参数: ~3min/翼型
+                maxiter=5, popsize=3,  # 小参数: ~1-3min/翼型
             )
             elapsed = time.perf_counter() - t0
             os.dup2(old_stdout, 1)

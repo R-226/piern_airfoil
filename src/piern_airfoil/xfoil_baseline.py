@@ -18,7 +18,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 XFOIL_BIN = "/usr/bin/xfoil"
-XFOIL_TIMEOUT = 30  # seconds per CL evaluation
+XFOIL_TIMEOUT = 10  # seconds per CL evaluation
 
 
 def airfoil_to_dat(
@@ -41,7 +41,7 @@ def airfoil_to_dat(
     if coordinates is None:
         import aerosandbox as asb
 
-        af = asb.Airfoil(name)
+        af = asb.KulfanAirfoil(name)
         coordinates = af.coordinates
 
     lines = [f"{name}\n"]

@@ -27,6 +27,7 @@ dependencies = [
     "matplotlib>=3.5",
     "aerosandbox>=4.2.9",
     "Pillow>=9.0",
+    "statsmodels>=0.14.6",
 ]
 
 [project.optional-dependencies]
