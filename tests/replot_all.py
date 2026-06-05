@@ -44,7 +44,7 @@ LABELS = {
     "baseline": "Baseline (8w IPOPT)",
     "rule": "Rule",
     "threshold": "Threshold",
-    "mlp": "PiERN Router",
+    "mlp": "Adaptive Router",
     "xfoil_de": "XFoil+DE",
 }
 METHODS = ["baseline", "rule", "threshold", "mlp"]
@@ -246,18 +246,23 @@ def plot_summary(rows, normal_afs, hard_afs, save_path):
     ax.legend(fontsize=S.TICK, frameon=False, loc="upper center",
               bbox_to_anchor=(0.5, -0.22), ncol=3)
 
-    # (b) Time speedup
+    # (b) Time speedup — ratio-of-means
     ax = axes[1]
     for i, m in enumerate(METHODS):
         vals = []
         for afs in cat_afs:
-            speedups = []
+            base_times = []
+            meth_times = []
             for af in afs:
                 base = get(rows, "baseline", af)
                 meth = get(rows, m, af)
-                if base and meth and meth["time_mean"] > 0:
-                    speedups.append(base["time_mean"] / meth["time_mean"])
-            vals.append(np.mean(speedups) if speedups else 1.0)
+                if base and np.isfinite(base["time_mean"]) and base["time_mean"] > 0:
+                    base_times.append(base["time_mean"])
+                if meth and meth["time_mean"] > 0:
+                    meth_times.append(meth["time_mean"])
+            mean_base = np.mean(base_times) if base_times else 0
+            mean_meth = np.mean(meth_times) if meth_times else 1
+            vals.append(mean_base / mean_meth if mean_meth > 0 else 1.0)
         bars = ax.bar(x + (i - 1) * w, vals, w, color=_PALETTE[m],
                       edgecolor="white", linewidth=0.3, label=LABELS[m])
     ax.axhline(y=1.0, color="black", linewidth=0.6, alpha=0.5, linestyle="--")

@@ -1,12 +1,11 @@
 """
-PiERN Router — decision layer for expert model invocation.
+Adaptive Router — decision layer for fidelity expansion.
 
-Two-level routing:
-- SeqRouter: LLM token sequence → trigger expert? (simplified for now)
-- OptRouter: optimization history → fidelity level decision
+OptRouter: optimization history → fidelity level decision (rule/threshold/mlp)
 
 Training:
 - train_threshold: grid search for optimal improvement_threshold
+- mlp_router: learned MLP policy (~1000 params)
 """
 
 from .opt_router import OptRouter

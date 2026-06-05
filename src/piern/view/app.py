@@ -240,7 +240,7 @@ def run_optimization(
         }
     if "piern" in results and "error" not in results["piern"]:
         r = results["piern"]
-        summary["PiERN Router"] = {
+        summary["Adaptive Router"] = {
             "CD": f"{r['cd']:.6f}",
             "Time": f"{r['time']:.2f}s",
             "Stages": len(r["stages"]),

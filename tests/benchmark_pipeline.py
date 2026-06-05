@@ -102,7 +102,7 @@ def _restore_stdout(old_stdout: int):
 
 
 def optimize_airfoil(airfoil) -> tuple[float, float]:
-    """运行 PiERN Router 优化，返回 (CD, time)。"""
+    """运行 Adaptive Router 优化，返回 (CD, time)。"""
     from piern_airfoil.hierarchical import AdaptiveHierarchicalOptimizer
     from piern.router.opt_router import OptRouter
 

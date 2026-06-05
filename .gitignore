@@ -52,3 +52,4 @@ docs/
 *.pdf
 *.zip
 results/
+!images/*.png

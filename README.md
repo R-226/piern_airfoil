@@ -120,7 +120,7 @@ tests/
 | Baseline | Direct 8-weight IPOPT (single-stage) |
 | Rule | Hierarchical with fixed threshold (0.01) |
 | Threshold | Hierarchical with learned threshold (grid search) |
-| **PiERN Router** | Hierarchical with learned MLP policy (~1000 params) |
+| **Adaptive Router** | Hierarchical with learned MLP policy (~1000 params) |
 | XFoil+DE | Classic: Differential Evolution + XFoil black-box evaluation |
 
 ## OptRouter Modes
@@ -130,6 +130,26 @@ tests/
 | `rule` | Fixed improvement threshold (0.01) | None |
 | `threshold` | Learned threshold via grid search | `train_threshold.py` |
 | `mlp` | Learned MLP policy (~1000 params) | `mlp_router.py` |
+
+## Results
+
+### Cross-Category Summary
+
+![Benchmark Summary](images/benchmark_summary.png)
+
+105 airfoils across Normal/Medium/Hard categories. (a) CD improvement over baseline, (b) relative optimization time, (c) success rate.
+
+### Case Study: NACA 0012
+
+![Case Study](images/benchmark_case_study.png)
+
+All five methods applied to NACA 0012. NeuralFoil-based methods achieve similar CD (~0.071) in comparable time, while XFoil+DE is 8x slower.
+
+### Ablation: Hierarchical vs Direct
+
+![Ablation A1](images/ablation_1_hierarchical_vs_direct.png)
+
+Hierarchical CST (4→8 weights) achieves comparable CD to direct 8-weight optimization with lower variance and tighter runtime distribution.
 
 ## Benchmark Suite
 

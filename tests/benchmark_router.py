@@ -5,7 +5,7 @@ Router Benchmark — 优化策略对比。
   - Baseline:     NeuralOptimizer 全 8 权重 IPOPT
   - Rule:         固定阈值 0.01 的层次化路由
   - Threshold:    网格搜索学习的最优阈值
-  - PiERN Router: 基于 MLP 的学习型路由
+  - Adaptive Router: 基于 MLP 的自适应路由
   - XFoil+DE:     经典基线 — 差分进化 + XFoil 黑箱评估
 
 场景:
@@ -87,7 +87,7 @@ METHOD_LABELS = {
     "baseline": "Baseline (8w IPOPT)",
     "rule": "Rule",
     "threshold": "Threshold",
-    "mlp": "PiERN Router",
+    "mlp": "Adaptive Router",
     "xfoil_de": "XFoil+DE (classic)",
 }
 
@@ -993,17 +993,23 @@ def visualize_summary(
     ax.legend(**_PubStyle.LEGEND_KW)
 
     # ── (b) Mean time speedup ──
+    # ratio-of-means: 先算各类别均值，再算 ratio
     ax = axes[1]
     for i, m in enumerate(methods):
         vals = []
         for stats, afs in zip(cat_stats, cat_airfoils):
-            speedups = []
+            base_times = []
+            meth_times = []
             for af in afs:
                 base = _get_stats(stats, "baseline", af)
                 meth = _get_stats(stats, m, af)
-                if base and meth and meth.time_mean > 0:
-                    speedups.append(base.time_mean / meth.time_mean)
-            vals.append(np.mean(speedups) if speedups else 1.0)
+                if base and np.isfinite(base.time_mean) and base.time_mean > 0:
+                    base_times.append(base.time_mean)
+                if meth and meth.time_mean > 0:
+                    meth_times.append(meth.time_mean)
+            mean_base = np.mean(base_times) if base_times else 0
+            mean_meth = np.mean(meth_times) if meth_times else 1
+            vals.append(mean_base / mean_meth if mean_meth > 0 else 1.0)
         offset = (i - 1) * bar_w
         bars = ax.bar(
             x + offset, vals, bar_w,
@@ -1731,7 +1737,7 @@ def main():
     all_airfoils = normal_afs + medium_afs + hard_afs
 
     print("=" * 90)
-    print("PiERN Router Benchmark")
+    print("Adaptive Router Benchmark")
     print("=" * 90)
     print(f"CL 目标:  {CL_TARGETS}")
     print(f"CL 权重:  {CL_WEIGHTS}")
