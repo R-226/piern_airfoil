@@ -45,7 +45,7 @@ uv run python -m piern.view.app                          # Gradio web UI
 uv run python -m piern.prompt2data.encoder_extractor     # prompt2data training
 uv run python -m piern.router.train_threshold            # A1: learn optimal threshold
 uv run python -m piern.router.mlp_router                 # A2: train MLP router
-uv run python tests/benchmark_router.py                  # router benchmark (5 methods x 105 airfoils)
+uv run python tests/benchmark_router.py                  # router benchmark (4 methods + XFoil analysis, 105 airfoils)
 uv run python tests/benchmark_pipeline.py                # pipeline benchmark (ground truth vs image)
 uv run python tests/benchmark_ablation.py                # ablation study (4 experiments + sensitivity)
 uv run python tests/run_all_benchmarks.py                # run all benchmarks (one-click)

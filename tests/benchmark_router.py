@@ -20,12 +20,12 @@ Router Benchmark — 优化策略对比。
   results/table_router_full.csv          — 完整结果表 (类别×方法)
   results/table_router_latex.tex         — LaTeX 格式结果表
   results/table_significance.csv         — 统计显著性检验 (Mann-Whitney U)
-  results/benchmark_normal.png           — 常规场景对比
-  results/benchmark_medium.png           — 中等场景对比
-  results/benchmark_hard.png             — 困难场景对比
+  results/benchmark_normal.png           — 常规场景对比 (4方法, 数字编号)
+  results/benchmark_medium.png           — 中等场景对比 (4方法, 数字编号)
+  results/benchmark_hard.png             — 困难场景对比 (4方法, 数字编号)
   results/benchmark_summary.png          — 跨类别汇总
-  results/benchmark_method_comparison.png — NeuralFoil vs XFoil+DE
-  results/benchmark_dist_*.png           — CD 分布箱线图 (4张)
+  results/benchmark_xfoil_analysis.png   — XFoil+DE 困难分析 (单独)
+  results/benchmark_dist_*.png           — CD 分布箱线图 (4张, 含离群点)
   results/benchmark_diff_*.png           — 难度-改善散点图 (4张)
 """
 
@@ -100,7 +100,8 @@ METHOD_COLORS = {
     "xfoil_de": "#7B3294",
 }
 
-OPT_METHODS = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
+OPT_METHODS = ["baseline", "rule", "threshold", "mlp"]
+XFOIL_METHODS = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
 
 
 # ── 数据结构 ────────────────────────────────────────────────────────────
@@ -313,7 +314,7 @@ def run_benchmark_group(
     """对一组翼型运行所有方法。"""
     all_runs: list[RunResult] = []
     all_stats: list[StatsResult] = []
-    total = len(airfoils) * (len(OPT_METHODS) + 1)  # +1: initial
+    total = len(airfoils) * (len(OPT_METHODS) + 2)  # +1: initial, +1: xfoil_de
     idx = 0
 
     for airfoil_name in airfoils:
@@ -336,6 +337,18 @@ def run_benchmark_group(
             all_stats.append(compute_stats([r]))
             status = f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED"
             print(status)
+
+        # XFoil+DE (单独收集数据, 不参与主对比)
+        idx += 1
+        print(
+            f"  [{label} {idx}/{total}] {airfoil_name} xfoil_de...",
+            end=" ", flush=True,
+        )
+        r = run_once(airfoil_name, "xfoil_de", initial_cd=initial_cd)
+        all_runs.append(r)
+        all_stats.append(compute_stats([r]))
+        status = f"CD={r.cd:.4f} {r.time:.1f}s" if r.success else "FAILED"
+        print(status)
 
     return all_stats, all_runs
 
@@ -464,6 +477,22 @@ def _grouped_bars(
             _annotate_bars(ax, bars, vals, suffix=suffix)
 
 
+def _numbered_airfoil_labels(airfoils: list[str]) -> tuple[list[str], str]:
+    """生成数字编号标签和图例文本。
+
+    Returns:
+        (numbered_labels, legend_text)
+    """
+    labels = [str(i + 1) for i in range(len(airfoils))]
+    legend_lines = [f"{i + 1}: {af.upper()[:14]}" for i, af in enumerate(airfoils)]
+    # 每行最多 5 个
+    lines = []
+    for chunk_start in range(0, len(legend_lines), 5):
+        lines.append("  ".join(legend_lines[chunk_start:chunk_start + 5]))
+    legend_text = "Airfoil Index:\n" + "\n".join(lines)
+    return labels, legend_text
+
+
 def visualize_normal(
     all_stats: list[StatsResult],
     airfoils: list[str],
@@ -472,61 +501,60 @@ def visualize_normal(
     """Normal scenario visualization — journal publication quality.
 
     Layout (2x2):
-      (a) CD improvement vs baseline (%)      — grouped bars, all 3 methods
-      (b) Time speedup vs baseline (ratio)    — grouped bars with speedup labels
-      (c) Success rate (%)                    — per-method bar chart
-      (d) Mean improvement summary            — bar chart of aggregated metrics
+      (a) Final CD                      — grouped bars, 4 methods
+      (b) Optimization time             — grouped bars
+      (c) Success rate (%)              — per-method bar chart
+      (d) CD improvement over initial   — grouped bars
     """
     n_af = len(airfoils)
     x = np.arange(n_af)
+    af_labels, legend_text = _numbered_airfoil_labels(airfoils)
 
     fig, axes = plt.subplots(
         2, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 2),
         gridspec_kw=dict(hspace=0.55, wspace=0.38),
     )
 
-    methods_all = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
-    bar_w = _PubStyle.BAR_WIDTH * 0.8  # narrower to fit 5 methods
-    af_labels = [n.upper()[:12] for n in airfoils]
+    bar_w = _PubStyle.BAR_WIDTH * 0.9
 
     # ── (a) CD comparison (absolute) ──
     ax = axes[0, 0]
-    cd_data = {m: [] for m in methods_all}
+    cd_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
-        for m in methods_all:
+        for m in OPT_METHODS:
             s = _get_stats(all_stats, m, af)
             cd_data[m].append(s.cd_mean if s and s.cd_mean < 1e10 else 0.0)
 
-    _grouped_bars(ax, x, cd_data, methods_all, bar_w)
+    _grouped_bars(ax, x, cd_data, OPT_METHODS, bar_w)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "Weighted CD", "(a) Final CD")
     ax.legend(**_PubStyle.LEGEND_KW)
 
     # ── (b) Time comparison ──
     ax = axes[0, 1]
-    time_data = {m: [] for m in methods_all}
+    time_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
-        for m in methods_all:
+        for m in OPT_METHODS:
             s = _get_stats(all_stats, m, af)
             time_data[m].append(s.time_mean if s else 0.0)
 
-    _grouped_bars(ax, x, time_data, methods_all, bar_w)
+    _grouped_bars(ax, x, time_data, OPT_METHODS, bar_w)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "Time (s)", "(b) Optimization Time")
 
     # ── (c) Success rate ──
     ax = axes[1, 0]
     success_rates = []
-    for m in methods_all:
+    for m in OPT_METHODS:
         rates = [_get_stats(all_stats, m, af) for af in airfoils]
         rates = [s.success_rate for s in rates if s]
         success_rates.append(np.mean(rates) * 100 if rates else 0)
 
     bars = ax.bar(
-        range(len(methods_all)), success_rates, 0.55,
-        color=[_PALETTE.get(m, "#888888") for m in methods_all],
+        range(len(OPT_METHODS)), success_rates, 0.55,
+        color=[_PALETTE.get(m, "#888888") for m in OPT_METHODS],
         edgecolor="white", linewidth=0.3,
     )
     for bar, rate in zip(bars, success_rates):
@@ -535,36 +563,44 @@ def visualize_normal(
             f"{rate:.0f}%", ha="center", va="bottom",
             fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, fontweight="bold",
         )
-    ax.set_xticks(range(len(methods_all)))
+    ax.set_xticks(range(len(OPT_METHODS)))
     ax.set_xticklabels(
-        [METHOD_LABELS[m] for m in methods_all],
+        [METHOD_LABELS[m] for m in OPT_METHODS],
         fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT,
     )
     ax.set_ylim(0, 110)
-    _style_axes(ax, "", "Success Rate (%)", f"(c) Optimization Success (CD < 0.15)")
+    _style_axes(ax, "", "Success Rate (%)", "(c) Optimization Success (CD < 0.15)")
 
     # ── (d) CD improvement over initial ──
     ax = axes[1, 1]
-    imp_data = {m: [] for m in methods_all}
+    imp_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
         init_s = _get_stats(all_stats, "initial", af)
-        for m in methods_all:
+        for m in OPT_METHODS:
             meth = _get_stats(all_stats, m, af)
-            if init_s and meth and init_s.cd_mean > 0 and meth.cd_mean < 1e10:
-                imp_data[m].append((init_s.cd_mean - meth.cd_mean) / init_s.cd_mean * 100)
+            if init_s and meth and meth.cd_mean < 1e10:
+                if np.isinf(init_s.cd_mean):
+                    imp_data[m].append(100.0)  # rescue
+                elif init_s.cd_mean > 0:
+                    imp_data[m].append((init_s.cd_mean - meth.cd_mean) / init_s.cd_mean * 100)
+                else:
+                    imp_data[m].append(0.0)
             else:
                 imp_data[m].append(0.0)
 
-    _grouped_bars(ax, x, imp_data, methods_all, bar_w)
+    _grouped_bars(ax, x, imp_data, OPT_METHODS, bar_w)
     ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.7)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "CD Improvement over Initial (%)", "(d) Optimization Gain")
 
     fig.suptitle(
         f"Router Benchmark — Normal Cases ({n_af} airfoils)",
         fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=0.99,
     )
+    fig.text(0.5, -0.06, legend_text, fontsize=5.5, fontfamily=_SERIF_FONT,
+             ha="center", va="top", transform=fig.transFigure,
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#f8f8f8", alpha=0.8))
     plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
     print(f"\nPublication figure saved: {save_path}")
@@ -578,51 +614,50 @@ def visualize_medium(
     """Medium scenario visualization — same layout as normal."""
     n_af = len(airfoils)
     x = np.arange(n_af)
+    af_labels, legend_text = _numbered_airfoil_labels(airfoils)
 
     fig, axes = plt.subplots(
         2, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 2),
         gridspec_kw=dict(hspace=0.55, wspace=0.38),
     )
 
-    methods_all = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
-    bar_w = _PubStyle.BAR_WIDTH * 0.8
-    af_labels = [n.upper()[:12] for n in airfoils]
+    bar_w = _PubStyle.BAR_WIDTH * 0.9
 
     # (a) CD
     ax = axes[0, 0]
-    cd_data = {m: [] for m in methods_all}
+    cd_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
-        for m in methods_all:
+        for m in OPT_METHODS:
             s = _get_stats(all_stats, m, af)
             cd_data[m].append(s.cd_mean if s and s.cd_mean < 1e10 else 0.0)
-    _grouped_bars(ax, x, cd_data, methods_all, bar_w)
+    _grouped_bars(ax, x, cd_data, OPT_METHODS, bar_w)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "Weighted CD", "(a) Final CD")
     ax.legend(**_PubStyle.LEGEND_KW)
 
     # (b) Time
     ax = axes[0, 1]
-    time_data = {m: [] for m in methods_all}
+    time_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
-        for m in methods_all:
+        for m in OPT_METHODS:
             s = _get_stats(all_stats, m, af)
             time_data[m].append(s.time_mean if s else 0.0)
-    _grouped_bars(ax, x, time_data, methods_all, bar_w)
+    _grouped_bars(ax, x, time_data, OPT_METHODS, bar_w)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "Time (s)", "(b) Optimization Time")
 
     # (c) Success rate
     ax = axes[1, 0]
     success_rates = []
-    for m in methods_all:
+    for m in OPT_METHODS:
         rates = [_get_stats(all_stats, m, af) for af in airfoils]
         rates = [s.success_rate for s in rates if s]
         success_rates.append(np.mean(rates) * 100 if rates else 0)
     bars = ax.bar(
-        range(len(methods_all)), success_rates, 0.55,
-        color=[_PALETTE.get(m, "#888888") for m in methods_all],
+        range(len(OPT_METHODS)), success_rates, 0.55,
+        color=[_PALETTE.get(m, "#888888") for m in OPT_METHODS],
         edgecolor="white", linewidth=0.3,
     )
     for bar, rate in zip(bars, success_rates):
@@ -631,9 +666,9 @@ def visualize_medium(
             f"{rate:.0f}%", ha="center", va="bottom",
             fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, fontweight="bold",
         )
-    ax.set_xticks(range(len(methods_all)))
+    ax.set_xticks(range(len(OPT_METHODS)))
     ax.set_xticklabels(
-        [METHOD_LABELS[m] for m in methods_all],
+        [METHOD_LABELS[m] for m in OPT_METHODS],
         fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT,
     )
     ax.set_ylim(0, 110)
@@ -641,25 +676,33 @@ def visualize_medium(
 
     # (d) CD improvement
     ax = axes[1, 1]
-    imp_data = {m: [] for m in methods_all}
+    imp_data = {m: [] for m in OPT_METHODS}
     for af in airfoils:
         init_s = _get_stats(all_stats, "initial", af)
-        for m in methods_all:
+        for m in OPT_METHODS:
             meth = _get_stats(all_stats, m, af)
-            if init_s and meth and init_s.cd_mean > 0 and meth.cd_mean < 1e10:
-                imp_data[m].append((init_s.cd_mean - meth.cd_mean) / init_s.cd_mean * 100)
+            if init_s and meth and meth.cd_mean < 1e10:
+                if np.isinf(init_s.cd_mean):
+                    imp_data[m].append(100.0)
+                elif init_s.cd_mean > 0:
+                    imp_data[m].append((init_s.cd_mean - meth.cd_mean) / init_s.cd_mean * 100)
+                else:
+                    imp_data[m].append(0.0)
             else:
                 imp_data[m].append(0.0)
-    _grouped_bars(ax, x, imp_data, methods_all, bar_w)
+    _grouped_bars(ax, x, imp_data, OPT_METHODS, bar_w)
     ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.7)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "CD Improvement over Initial (%)", "(d) Optimization Gain")
 
     fig.suptitle(
         f"Router Benchmark — Medium Cases ({n_af} airfoils)",
         fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=0.99,
     )
+    fig.text(0.5, -0.06, legend_text, fontsize=5.5, fontfamily=_SERIF_FONT,
+             ha="center", va="top", transform=fig.transFigure,
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#f8f8f8", alpha=0.8))
     plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
     print(f"\nPublication figure saved: {save_path}")
@@ -681,13 +724,12 @@ def visualize_hard(
     n_af = len(airfoils)
     x = np.arange(n_af)
     bar_w = _PubStyle.BAR_WIDTH
+    af_labels, legend_text = _numbered_airfoil_labels(airfoils)
 
     fig, axes = plt.subplots(
         2, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 2),
         gridspec_kw=dict(hspace=0.55, wspace=0.38),
     )
-
-    af_labels = [n.upper()[:12] for n in airfoils]
 
     # ── (a) CD comparison ──
     ax = axes[0, 0]
@@ -699,7 +741,7 @@ def visualize_hard(
 
     _grouped_bars(ax, x, cd_data, OPT_METHODS, bar_w, annotate=False)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "Weighted CD", "(a) CD Comparison")
     ax.legend(**_PubStyle.LEGEND_KW)
 
@@ -713,7 +755,7 @@ def visualize_hard(
 
     _grouped_bars(ax, x, time_data, OPT_METHODS, bar_w, annotate=False)
     ax.set_xticks(x)
-    ax.set_xticklabels(af_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels(af_labels, fontsize=5.5, ha="center")
     _style_axes(ax, "", "Time (s)", "(b) Optimization Time")
 
     # ── (c) Rescue rate ──
@@ -745,13 +787,13 @@ def visualize_hard(
 
     # ── (d) CD improvement ratio ──
     ax = axes[1, 1]
-    ratios, ratio_labels = [], []
-    for af in airfoils:
+    ratios, ratio_idx = [], []
+    for i, af in enumerate(airfoils):
         base = _get_stats(all_stats, "baseline", af)
         piern = _get_stats(all_stats, "mlp", af)
         if base and piern and piern.cd_mean > 0 and base.cd_mean < 1e10:
             ratios.append(base.cd_mean / piern.cd_mean)
-            ratio_labels.append(af.upper()[:12])
+            ratio_idx.append(i + 1)
 
     ratio_colors = [_PALETTE["mlp"] if r >= 1.0 else "#C0C0C0" for r in ratios]
     bars = ax.bar(
@@ -766,7 +808,7 @@ def visualize_hard(
         )
     ax.axhline(y=1.0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
     ax.set_xticks(range(len(ratios)))
-    ax.set_xticklabels(ratio_labels, fontsize=5.5, rotation=90, ha="center")
+    ax.set_xticklabels([str(i) for i in ratio_idx], fontsize=5.5, ha="center")
     _style_axes(
         ax, "", "Baseline CD / PiERN CD",
         "(d) PiERN Improvement Ratio",
@@ -785,94 +827,115 @@ def visualize_hard(
         f"Router Benchmark — Hard Cases ({n_af} airfoils)",
         fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=0.99,
     )
+    fig.text(0.5, -0.06, legend_text, fontsize=5.5, fontfamily=_SERIF_FONT,
+             ha="center", va="top", transform=fig.transFigure,
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#f8f8f8", alpha=0.8))
     plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
     print(f"Publication figure saved: {save_path}")
 
 
-def visualize_method_comparison(
+def visualize_xfoil_analysis(
     all_stats: list[StatsResult],
     airfoils: list[str],
-    save_path: str = "results/benchmark_method_comparison.png",
+    save_path: str = "results/benchmark_xfoil_analysis.png",
 ):
-    """NeuralFoil 方法 vs XFoil+DE 基线 — 对比优化质量、时间、成功率。
+    """XFoil+DE 优化困难分析 — 单独展示 XFoil 的问题。
 
     Layout (1x3):
-      (a) Final CD comparison — grouped bars across all methods
-      (b) Optimization time  — grouped bars
-      (c) CD vs Time scatter — Pareto-style, each method a different color
+      (a) XFoil+DE vs NeuralFoil baseline CD — 展示 XFoil 收敛失败
+      (b) XFoil+DE success rate vs others     — 成功率对比
+      (c) XFoil+DE time distribution          — 时间分布
     """
-    methods = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
-
     fig, axes = plt.subplots(
         1, 3, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H),
         gridspec_kw=dict(wspace=0.40),
     )
 
-    # ── (a) Mean CD per method ──
+    # ── (a) CD comparison: XFoil+DE vs Baseline ──
     ax = axes[0]
-    mean_cds = []
-    for m in methods:
-        ok = [s for s in all_stats if s.method == m and s.cd_mean < 1e10 and s.airfoil_name in airfoils]
-        mean_cds.append(np.mean([s.cd_mean for s in ok]) if ok else 0)
+    xfoil_cds = []
+    baseline_cds = []
+    for af in airfoils:
+        xfoil_s = _get_stats(all_stats, "xfoil_de", af)
+        base_s = _get_stats(all_stats, "baseline", af)
+        if xfoil_s and base_s:
+            if xfoil_s.cd_mean < 1e10:
+                xfoil_cds.append(xfoil_s.cd_mean)
+            if base_s.cd_mean < 1e10:
+                baseline_cds.append(base_s.cd_mean)
 
-    bars = ax.bar(
-        range(len(methods)), mean_cds, 0.55,
-        color=[_PALETTE.get(m, "#888") for m in methods],
-        edgecolor="white", linewidth=0.3,
-    )
-    for bar, v in zip(bars, mean_cds):
+    methods_two = ["Baseline (8w IPOPT)", "XFoil+DE"]
+    cds_two = [np.mean(baseline_cds) if baseline_cds else 0,
+               np.mean(xfoil_cds) if xfoil_cds else 0]
+    colors_two = [_PALETTE["baseline"], _PALETTE["xfoil_de"]]
+    bars = ax.bar(range(2), cds_two, 0.5, color=colors_two, edgecolor="white", linewidth=0.3)
+    for bar, v in zip(bars, cds_two):
         if v > 0:
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.001,
                     f"{v:.4f}", ha="center", va="bottom",
-                    fontsize=6, fontfamily=_SERIF_FONT)
-    ax.set_xticks(range(len(methods)))
-    ax.set_xticklabels([METHOD_LABELS[m] for m in methods],
-                       fontsize=7, fontfamily=_SERIF_FONT, rotation=20, ha="right")
-    _style_axes(ax, "", "Mean Weighted CD", "(a) Optimization Quality")
+                    fontsize=7, fontfamily=_SERIF_FONT)
+    ax.set_xticks(range(2))
+    ax.set_xticklabels(methods_two, fontsize=7, fontfamily=_SERIF_FONT, rotation=15, ha="right")
+    _style_axes(ax, "", "Mean Weighted CD", "(a) Mean CD Comparison")
 
-    # ── (b) Mean time per method ──
+    # ── (b) Success rate comparison ──
     ax = axes[1]
+    methods_compare = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
+    success_rates = []
+    for m in methods_compare:
+        rates = [_get_stats(all_stats, m, af) for af in airfoils]
+        rates = [s.success_rate for s in rates if s]
+        success_rates.append(np.mean(rates) * 100 if rates else 0)
+
+    bars = ax.bar(
+        range(len(methods_compare)), success_rates, 0.55,
+        color=[_PALETTE.get(m, "#888") for m in methods_compare],
+        edgecolor="white", linewidth=0.3,
+    )
+    for bar, rate in zip(bars, success_rates):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5,
+            f"{rate:.0f}%", ha="center", va="bottom",
+            fontsize=7, fontfamily=_SERIF_FONT, fontweight="bold",
+        )
+    ax.set_xticks(range(len(methods_compare)))
+    ax.set_xticklabels(
+        [METHOD_LABELS[m] for m in methods_compare],
+        fontsize=6.5, fontfamily=_SERIF_FONT, rotation=20, ha="right",
+    )
+    ax.set_ylim(0, 115)
+    _style_axes(ax, "", "Success Rate (%)", "(b) Success Rate (all methods)")
+
+    # ── (c) Time comparison ──
+    ax = axes[2]
     mean_times = []
-    for m in methods:
+    for m in methods_compare:
         ok = [s for s in all_stats if s.method == m and s.airfoil_name in airfoils]
         mean_times.append(np.mean([s.time_mean for s in ok]) if ok else 0)
 
     bars = ax.bar(
-        range(len(methods)), mean_times, 0.55,
-        color=[_PALETTE.get(m, "#888") for m in methods],
+        range(len(methods_compare)), mean_times, 0.55,
+        color=[_PALETTE.get(m, "#888") for m in methods_compare],
         edgecolor="white", linewidth=0.3,
     )
     for bar, v in zip(bars, mean_times):
         if v > 0:
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
                     f"{v:.1f}s", ha="center", va="bottom",
-                    fontsize=6, fontfamily=_SERIF_FONT)
-    ax.set_xticks(range(len(methods)))
-    ax.set_xticklabels([METHOD_LABELS[m] for m in methods],
-                       fontsize=7, fontfamily=_SERIF_FONT, rotation=20, ha="right")
-    _style_axes(ax, "", "Mean Time (s)", "(b) Optimization Speed")
+                    fontsize=7, fontfamily=_SERIF_FONT)
+    ax.set_xticks(range(len(methods_compare)))
+    ax.set_xticklabels(
+        [METHOD_LABELS[m] for m in methods_compare],
+        fontsize=6.5, fontfamily=_SERIF_FONT, rotation=20, ha="right",
+    )
+    _style_axes(ax, "", "Mean Time (s)", "(c) Optimization Time")
 
-    # ── (c) CD vs Time scatter (Pareto) ──
-    ax = axes[2]
-    for m in methods:
-        ok = [s for s in all_stats if s.method == m and s.cd_mean < 1e10 and s.airfoil_name in airfoils]
-        if ok:
-            mean_cd = np.mean([s.cd_mean for s in ok])
-            mean_time = np.mean([s.time_mean for s in ok])
-            ax.scatter(mean_time, mean_cd, c=_PALETTE.get(m, "#888"), s=80,
-                       label=METHOD_LABELS[m], edgecolors="black", linewidths=0.5, zorder=5)
-    ax.set_xlabel("Mean Time (s)", fontsize=8, fontfamily=_SERIF_FONT)
-    ax.set_ylabel("Mean CD", fontsize=8, fontfamily=_SERIF_FONT)
-    ax.set_title("(c) Pareto Front (CD vs Time)", fontsize=10, fontfamily=_SERIF_FONT)
-    ax.legend(fontsize=6, frameon=False)
-    _style_axes(ax, "", "", "")
-
-    fig.suptitle("NeuralFoil Methods vs XFoil+DE Baseline",
+    fig.suptitle("XFoil+DE Optimization Difficulty Analysis",
                  fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=1.02)
     plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
-    print(f"Method comparison figure saved: {save_path}")
+    print(f"XFoil analysis figure saved: {save_path}")
 
 
 def visualize_summary(
@@ -910,8 +973,11 @@ def visualize_summary(
             for af in afs:
                 base = _get_stats(stats, "baseline", af)
                 meth = _get_stats(stats, m, af)
-                if base and meth and base.cd_mean > 0:
-                    imps.append((meth.cd_mean - base.cd_mean) / base.cd_mean * 100)
+                if base and meth and meth.cd_mean < 1e10:
+                    if np.isinf(base.cd_mean):
+                        imps.append(-100.0)
+                    elif base.cd_mean > 0:
+                        imps.append((meth.cd_mean - base.cd_mean) / base.cd_mean * 100)
             vals.append(np.mean(imps) if imps else 0)
         offset = (i - 1) * bar_w
         bars = ax.bar(
@@ -1072,7 +1138,7 @@ def run_significance_tests(
         effect_size_r, n_baseline, n_method, median_baseline, median_method
     """
     results = []
-    methods = ["rule", "threshold", "mlp", "xfoil_de"]
+    methods = ["rule", "threshold", "mlp"]
 
     for method in methods:
         # 收集 baseline 和 method 的 CD 值
@@ -1299,7 +1365,7 @@ def visualize_distributions(
       (a) CD distribution (boxplot + strip) — all methods
       (b) CD improvement over baseline (per-airfoil) — strip + mean
     """
-    methods = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
+    methods = ["baseline", "rule", "threshold", "mlp"]
     n_af = len(airfoils)
 
     fig, axes = plt.subplots(
@@ -1323,7 +1389,8 @@ def visualize_distributions(
         positions=range(len(methods)),
         widths=0.5,
         patch_artist=True,
-        showfliers=False,
+        showfliers=True,
+        flierprops=dict(marker="o", markersize=3, alpha=0.4),
         medianprops=dict(color="black", linewidth=1.2),
     )
     for patch, m in zip(bp["boxes"], methods):
@@ -1352,13 +1419,16 @@ def visualize_distributions(
 
     # ── (b) CD improvement over baseline (per-airfoil) ──
     ax = axes[1]
-    for i, m in enumerate(["rule", "threshold", "mlp", "xfoil_de"]):
+    for i, m in enumerate(["rule", "threshold", "mlp"]):
         imps = []
         for af in airfoils:
             base = _get_stats(all_stats, "baseline", af)
             meth = _get_stats(all_stats, m, af)
-            if base and meth and base.cd_mean > 0 and meth.cd_mean < 1e10:
-                imps.append((base.cd_mean - meth.cd_mean) / base.cd_mean * 100)
+            if base and meth and meth.cd_mean < 1e10:
+                if np.isinf(base.cd_mean):
+                    imps.append(100.0)  # rescue case
+                elif base.cd_mean > 0:
+                    imps.append((base.cd_mean - meth.cd_mean) / base.cd_mean * 100)
         if imps:
             jitter = np.random.default_rng(42 + i).uniform(-0.15, 0.15, len(imps))
             ax.scatter(
@@ -1377,9 +1447,9 @@ def visualize_distributions(
             )
 
     ax.axhline(y=0, color="black", linewidth=0.6, alpha=0.5, linestyle="--")
-    ax.set_xticks(range(4))
+    ax.set_xticks(range(3))
     ax.set_xticklabels(
-        [METHOD_LABELS[m] for m in ["rule", "threshold", "mlp", "xfoil_de"]],
+        [METHOD_LABELS[m] for m in ["rule", "threshold", "mlp"]],
         fontsize=_PubStyle.TICK_SIZE, fontfamily=_SERIF_FONT, rotation=20, ha="right",
     )
     _style_axes(ax, "", "CD Improvement over Baseline (%)", f"(b) Per-Airfoil Improvement — {category}")
@@ -1408,7 +1478,7 @@ def visualize_difficulty_improvement(
       (a) Per-airfoil scatter — x: initial CD, y: improvement %
       (b) Binned mean improvement — grouped by difficulty quartiles
     """
-    methods = ["rule", "threshold", "mlp", "xfoil_de"]
+    methods = ["rule", "threshold", "mlp"]
 
     fig, axes = plt.subplots(
         1, 2, figsize=(_PubStyle.FIG_W, _PubStyle.ROW_H * 0.9),
@@ -1422,9 +1492,13 @@ def visualize_difficulty_improvement(
         for af in airfoils:
             init = _get_stats(all_stats, "initial", af)
             meth = _get_stats(all_stats, m, af)
-            if init and meth and init.cd_mean > 0 and meth.cd_mean < 1e10:
-                x_vals.append(init.cd_mean)
-                y_vals.append((init.cd_mean - meth.cd_mean) / init.cd_mean * 100)
+            if init and meth and meth.cd_mean < 1e10:
+                if np.isinf(init.cd_mean):
+                    x_vals.append(0.3)  # rescue case, use arbitrary x
+                    y_vals.append(100.0)
+                elif init.cd_mean > 0:
+                    x_vals.append(init.cd_mean)
+                    y_vals.append((init.cd_mean - meth.cd_mean) / init.cd_mean * 100)
 
         if x_vals:
             ax.scatter(
@@ -1481,8 +1555,11 @@ def visualize_difficulty_improvement(
                 for af, _ in q_afs:
                     init = _get_stats(all_stats, "initial", af)
                     meth = _get_stats(all_stats, m, af)
-                    if init and meth and init.cd_mean > 0 and meth.cd_mean < 1e10:
-                        imps.append((init.cd_mean - meth.cd_mean) / init.cd_mean * 100)
+                    if init and meth and meth.cd_mean < 1e10:
+                        if np.isinf(init.cd_mean):
+                            imps.append(100.0)
+                        elif init.cd_mean > 0:
+                            imps.append((init.cd_mean - meth.cd_mean) / init.cd_mean * 100)
                 vals.append(np.mean(imps) if imps else 0)
             offset = (i - 1.5) * bar_w
             bars = ax.bar(
@@ -1506,6 +1583,144 @@ def visualize_difficulty_improvement(
     plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close()
     print(f"Difficulty-improvement figure saved: {save_path}")
+
+
+# ── NACA 0012 案例分析图 ─────────────────────────────────────────────────
+
+
+def visualize_case_study(airfoil_name: str = "naca0012", save_path: str = "results/benchmark_case_study.png"):
+    """NACA 0012 案例分析: 展示各方法优化后的翼型形状、CD 值和时间。
+
+    Layout (1x3):
+      (a) 各方法优化后的翼型轮廓叠加对比
+      (b) CD 值对比柱状图
+      (c) 优化时间对比柱状图
+    """
+    methods = ["baseline", "rule", "threshold", "mlp", "xfoil_de"]
+    method_labels = [METHOD_LABELS[m] for m in methods]
+
+    # 运行各方法获取优化后的翼型
+    af_init = asb.KulfanAirfoil(airfoil_name)
+    initial_cd = evaluate_cd(af_init)
+
+    optimized_airfoils = {}
+    cds = []
+    times = []
+
+    for method in methods:
+        print(f"  Case study: {method}...", end=" ", flush=True)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stdout = os.dup(1)
+        os.dup2(devnull, 1)
+        os.close(devnull)
+
+        t0 = time.perf_counter()
+        try:
+            if method == "baseline":
+                from piern_airfoil.optimizer import NeuralOptimizer
+                opt = NeuralOptimizer(
+                    airfoil=af_init, CL_targets=CL_TARGETS, CL_weights=CL_WEIGHTS,
+                    RE=RE, mach=MACH,
+                )
+                opt.update()
+                elapsed = time.perf_counter() - t0
+                cd = evaluate_cd(opt.airfoil)
+                optimized_airfoils[method] = opt.airfoil
+                cds.append(cd)
+                times.append(elapsed)
+            elif method == "xfoil_de":
+                from piern_airfoil.xfoil_optimizer import xfoil_optimize
+                result = xfoil_optimize(
+                    airfoil_name, CL_TARGETS, RE, CL_WEIGHTS, MACH,
+                    maxiter=5, popsize=3,
+                )
+                elapsed = time.perf_counter() - t0
+                optimized_airfoils[method] = result.optimized_airfoil
+                cds.append(result.final_cd)
+                times.append(elapsed)
+            else:
+                from piern_airfoil.hierarchical import AdaptiveHierarchicalOptimizer
+                from piern.router.opt_router import OptRouter
+
+                if method == "mlp":
+                    router = OptRouter.from_mlp()
+                elif method == "threshold":
+                    router = OptRouter.from_trained()
+                else:
+                    router = OptRouter(improvement_threshold=0.01)
+
+                optimizer = AdaptiveHierarchicalOptimizer(
+                    CL_targets=CL_TARGETS, CL_weights=CL_WEIGHTS,
+                    Re=RE, mach=MACH, start_weights=4, router=router,
+                )
+                result = optimizer.optimize(af_init)
+                elapsed = time.perf_counter() - t0
+                optimized_airfoils[method] = result.airfoil
+                cds.append(result.final_cd)
+                times.append(elapsed)
+
+            os.dup2(old_stdout, 1)
+            os.close(old_stdout)
+            print(f"CD={cds[-1]:.4f} {times[-1]:.1f}s")
+        except Exception as e:
+            elapsed = time.perf_counter() - t0
+            os.dup2(old_stdout, 1)
+            os.close(old_stdout)
+            print(f"FAILED: {e}")
+            optimized_airfoils[method] = af_init
+            cds.append(float("inf"))
+            times.append(elapsed)
+
+    # 绘图
+    fig, axes = plt.subplots(1, 3, figsize=(_PubStyle.FIG_W * 1.2, _PubStyle.ROW_H * 0.9),
+                             gridspec_kw=dict(wspace=0.35))
+
+    # (a) 翼型轮廓叠加
+    ax = axes[0]
+    # 初始翼型
+    coords_init = af_init.coordinates
+    ax.plot(coords_init[:, 0], coords_init[:, 1],
+            color="#888888", linewidth=1.0, linestyle="--", label="Initial", alpha=0.6)
+    # 各方法优化后
+    for m in methods:
+        af = optimized_airfoils[m]
+        coords = af.coordinates
+        ax.plot(coords[:, 0], coords[:, 1],
+                color=_PALETTE[m], linewidth=1.2, label=METHOD_LABELS[m], alpha=0.8)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x/c", fontsize=_PubStyle.AXIS_SIZE, fontfamily=_SERIF_FONT)
+    ax.set_ylabel("y/c", fontsize=_PubStyle.AXIS_SIZE, fontfamily=_SERIF_FONT)
+    _style_axes(ax, "x/c", "y/c", "(a) Optimized Airfoil Shapes")
+    ax.legend(fontsize=6, frameon=False, loc="upper center", ncol=3,
+              bbox_to_anchor=(0.5, -0.15))
+
+    # (b) CD 对比
+    ax = axes[1]
+    cds_plot = [initial_cd] + cds
+    colors_plot = ["#888888"] + [_PALETTE[m] for m in methods]
+    labels_plot = ["Initial"] + method_labels
+    bars = ax.bar(range(len(cds_plot)), cds_plot, 0.6,
+                  color=colors_plot, edgecolor="white", linewidth=0.3)
+    ax.set_xticks(range(len(labels_plot)))
+    ax.set_xticklabels(labels_plot, fontsize=6.5, fontfamily=_SERIF_FONT, rotation=20, ha="right")
+    _style_axes(ax, "", "Weighted CD", "(b) Drag Coefficient")
+
+    # (c) 时间对比
+    ax = axes[2]
+    times_plot = [0.0] + times  # initial time = 0
+    colors_times = ["#888888"] + [_PALETTE[m] for m in methods]
+    labels_times = ["Initial"] + method_labels
+    bars = ax.bar(range(len(times_plot)), times_plot, 0.6,
+                  color=colors_times, edgecolor="white", linewidth=0.3)
+    ax.set_xticks(range(len(labels_times)))
+    ax.set_xticklabels(labels_times, fontsize=6.5, fontfamily=_SERIF_FONT, rotation=20, ha="right")
+    _style_axes(ax, "", "Time (s)", "(c) Optimization Time")
+
+    fig.suptitle(f"Case Study — {airfoil_name.upper()}",
+                 fontsize=11, fontfamily=_SERIF_FONT, fontweight="bold", y=1.02)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close()
+    print(f"Case study figure saved: {save_path}")
 
 
 # ── 主函数 ──────────────────────────────────────────────────────────────
@@ -1549,10 +1764,10 @@ def main():
     # ── 汇总可视化 ──
     visualize_summary(normal_stats, hard_stats, normal_afs, hard_afs)
 
-    # ── NeuralFoil vs XFoil+DE 对比 ──
+    # ── XFoil+DE 困难分析 ──
     all_stats_combined = normal_stats + medium_stats + hard_stats
     all_afs_combined = normal_afs + medium_afs + hard_afs
-    visualize_method_comparison(all_stats_combined, all_afs_combined)
+    visualize_xfoil_analysis(all_stats_combined, all_afs_combined)
 
     # ── 分布可视化 ──
     visualize_distributions(all_stats_combined, normal_afs, "Normal", "results/benchmark_dist_normal.png")
@@ -1583,6 +1798,10 @@ def main():
         all_stats, normal_afs, medium_afs, hard_afs,
         sig_all, save_dir="results",
     )
+
+    # ── NACA 0012 案例分析 ──
+    print("\n>>> NACA 0012 Case Study")
+    visualize_case_study("naca0012", "results/benchmark_case_study.png")
 
     # ── 导出 CSV ──
     export_csv(all_stats)
