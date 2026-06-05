@@ -53,3 +53,5 @@ docs/
 *.zip
 results/
 !images/*.png
+paper/
+!paper/main.tex
