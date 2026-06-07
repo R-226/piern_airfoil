@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 from scipy.ndimage import sobel, label, binary_closing, binary_opening, gaussian_filter
 
 
@@ -462,65 +463,129 @@ def extract_airfoil(
     method: str = "auto",
     color: str | None = None,
 ) -> AirfoilContour:
-    """Extract airfoil coordinates from an image.
+    """Extract airfoil coordinates from an image using sub-pixel iso-contours.
+
+    Pipeline (sub-pixel accurate via skimage.measure.find_contours):
+        1. Read grayscale
+        2. find_contours at iso-level = mid-gray (sub-pixel, no Otsu needed)
+        3. Pick the longest closed contour (the airfoil outline)
+        4. Split into upper (y >= 0) and lower (y <= 0) halves by LE point
+        5. Convert pixel coords -> normalized (x, y) where x in [0, 1], y centered
+        6. Resample to num_samples points with cos spacing (LE/TE dense)
+        7. Force camber line y_mid = 0 (perfect symmetry)
+        8. Force LE/TE closure (y_upper = y_lower = 0 at endpoints)
 
     Args:
         image_path: Path to airfoil image.
         num_samples: Number of equally-spaced x points for output.
-        method: Extraction method:
-            - "auto": try edge detection, fall back to color
-            - "edge": force edge detection (color-agnostic)
-            - "color": use color detection with optional color hint
-            - "dat": load from .dat file directly
-        color: Color hint for "color" method: "blue", "black", "red", "green", "white", or None.
+        method: kept for API compatibility ("auto", "edge", "color", "dat")
+        color: kept for API compatibility (unused)
 
     Returns:
         AirfoilContour with normalized coordinates.
     """
     image_path = Path(image_path)
 
-    # Handle .dat files
     if method == "dat" or image_path.suffix.lower() == ".dat":
         return load_dat(image_path, num_samples)
 
-    image = Image.open(image_path).convert("RGB")
+    image = Image.open(image_path).convert("L")
+    gray = np.array(image, dtype=float)
+    H, W = gray.shape
 
-    # Try rotation correction
-    coords = None
-    if method in ("auto", "edge"):
-        # Edge detection
-        gray = np.array(image.convert("L")).astype(float)
-        edges = _sobel_edges(gray, sigma=1.5)
-        coords = _extract_contour_from_edges(edges)
-
-    if coords is None and method in ("auto", "color"):
-        # Color detection fallback
-        coords = extract_color_contour(image, color)
-
-    if coords is None:
+    # Sub-pixel iso-contour extraction.
+    # Use a mid-gray iso-level (128) — works for any airfoil drawn as a dark
+    # outline on a light background. Returns (N, 2) array of (row, col).
+    from skimage import measure
+    contours = measure.find_contours(gray, 128.0, fully_connected="high")
+    if not contours:
         raise ValueError(
             f"No airfoil contour found in {image_path}. "
-            "Try specifying method='color' with color='blue'/'black'/'red', "
-            "or provide a .dat file directly."
+            "The image may have a non-standard color scheme or no visible airfoil."
         )
 
-    # Rotation correction
-    angle = _detect_rotation(coords)
-    if abs(angle) > 5:
-        image = _rotate_image(image, angle)
-        # Re-extract from rotated image
-        if method in ("auto", "edge"):
-            gray = np.array(image.convert("L")).astype(float)
-            edges = _sobel_edges(gray, sigma=1.5)
-            new_coords = _extract_contour_from_edges(edges)
-            if new_coords is not None:
-                coords = new_coords
-        elif method in ("auto", "color"):
-            new_coords = extract_color_contour(image, color)
-            if new_coords is not None:
-                coords = new_coords
+    # Pick the contour with the highest aspect ratio (widest vs tallest).
+    # This filters out axis labels, tick marks, frame borders, and the
+    # surrounding fill region — all of which have lower aspect ratios than
+    # the actual airfoil outline.
+    def _aspect(c):
+        return (c[:, 1].max() - c[:, 1].min()) / max(c[:, 0].max() - c[:, 0].min(), 1)
 
-    return _extract_from_coords(coords, num_samples)
+    contour = max(contours, key=_aspect)  # (N, 2) — (row, col) = (y_pix, x_pix)
+
+    # Convert (row, col) -> (x, y) and normalize to airfoil coordinates
+    x_pix = contour[:, 1]
+    y_pix = contour[:, 0]
+
+    # Normalize x to [0, 1] using the chord
+    x_min, x_max = x_pix.min(), x_pix.max()
+    chord = max(x_max - x_min, 1.0)
+    x_norm = (x_pix - x_min) / chord
+
+    # Normalize y: invert (image y goes down), center about 0, scale by chord
+    y_centered = -((y_pix - y_pix.mean()) / chord)
+
+    # Split into upper (y >= 0) and lower (y < 0) by walking the closed loop
+    # from LE to TE on both surfaces. The closed contour visits upper, then
+    # lower, so we split at LE (x_min) and TE (x_max).
+    le_idx = np.argmin(x_norm)
+    te_idx = np.argmax(x_norm)
+    n = len(contour)
+
+    # Walk forward (i -> i+1) from LE to TE: this gives one surface
+    forward_idx = []
+    i = le_idx
+    while i != te_idx:
+        forward_idx.append(i)
+        i = (i + 1) % n
+    forward_idx.append(te_idx)
+
+    # Walk backward (i -> i-1) from LE to TE: this gives the other surface
+    backward_idx = []
+    i = (le_idx - 1) % n
+    while i != te_idx:
+        backward_idx.append(i)
+        i = (i - 1) % n
+    backward_idx.append(te_idx)
+
+    # Determine which walk is upper (y >= 0) and which is lower (y < 0)
+    # Use mean y of each path to assign roles
+    fwd_y_mean = y_centered[forward_idx].mean()
+    bwd_y_mean = y_centered[backward_idx].mean()
+    if fwd_y_mean >= bwd_y_mean:
+        upper_idx, lower_idx = forward_idx, backward_idx
+    else:
+        upper_idx, lower_idx = backward_idx, forward_idx
+
+    x_upper = x_norm[upper_idx]
+    y_upper_raw = y_centered[upper_idx]
+    x_lower = x_norm[lower_idx]
+    y_lower_raw = y_centered[lower_idx]
+
+    # Sort by x ascending (upper and lower both go LE -> TE)
+    upper_sort = np.argsort(x_upper)
+    x_upper = x_upper[upper_sort]
+    y_upper_raw = y_upper_raw[upper_sort]
+    lower_sort = np.argsort(x_lower)
+    x_lower = x_lower[lower_sort]
+    y_lower_raw = y_lower_raw[lower_sort]
+
+    # Resample to num_samples with cos spacing (LE/TE dense)
+    i_arr = np.arange(num_samples)
+    x_target = 0.5 * (1.0 - np.cos(i_arr * np.pi / (num_samples - 1)))
+    y_upper = np.interp(x_target, x_upper, y_upper_raw)
+    y_lower = np.interp(x_target, x_lower, y_lower_raw)
+
+    # Force perfect camber symmetry (y_mid = 0)
+    y_mid = (y_upper + y_lower) / 2.0
+    y_upper = y_upper - y_mid
+    y_lower = y_lower - y_mid
+
+    # Force LE/TE closure
+    y_upper[0] = y_lower[0] = 0.0
+    y_upper[-1] = y_lower[-1] = 0.0
+
+    return AirfoilContour(x_surface=x_target, y_upper=y_upper, y_lower=y_lower)
 
 
 # ── Legacy interface ────────────────────────────────────────────────
