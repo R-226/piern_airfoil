@@ -78,9 +78,44 @@ pipeline.visualize(result)
 
 ### Web UI
 
+The Gradio web demo accepts a Chinese prompt and an airfoil image (or `.dat` file) and runs the full PiERN pipeline end-to-end. After launching, open `http://127.0.0.1:7860`.
+
 ```bash
+# launch from project root
 uv run python -m piern.view.app
+# or, equivalently
+cd src/piern/view && uv run python app.py
 ```
+
+**Step-by-step usage (with the bundled NACA 0012 example):**
+
+1. Paste the prompt below into the **Optimization prompt (Chinese)** textbox.
+2. In the **Airfoil image** field, upload `data/benchmark_images/naca0012.png` (or your own airfoil sketch / `.dat` file).
+3. Leave **Router mode** at the default `mlp`.
+4. Click **Optimize**. Expect ~10s for end-to-end run on NACA 0012; results appear in the **Summary** and **Shape & Performance Comparison** panels.
+
+**Example prompt (copy-paste ready):**
+
+> 在 Re=500e3*(CL/1.25)^-0.5、Mach=0.03 的条件下，优化附加图片中翼型的升阻比。我需要在升力系数 CL=[0.8, 1.0, 1.2, 1.4, 1.5, 1.6] 的工况下，按权重 [5, 6, 7, 8, 9, 10] 优化加权阻力。同时要求在任意升力系数下：
+> - 力矩系数不小于 -0.133
+> - 后缘角度不小于 6.03 度
+> - 前缘角度为 180 度（光滑）
+> - 三分之一弦长处相对厚度不小于 0.128
+> - 90% 弦长处相对厚度不小于 0.014
+> 基于这样的条件对翼型进行优化。
+
+**What the prompt is parsed into (18 output fields):**
+
+| Category | Count | Fields |
+|---|---|---|
+| Mach | 1 | `Mach = 0.03` |
+| CL targets | 6 | `CL = [0.8, 1.0, 1.2, 1.4, 1.5, 1.6]` |
+| Weights | 6 | `weights = [5, 6, 7, 8, 9, 10]` |
+| Constraints | 5 | `CM ≥ -0.133`, `TE_angle ≥ 6.03°`, `LE_angle = 180°`, `t@33% ≥ 0.128`, `t@90% ≥ 0.014` |
+
+The Chinese number parser is regex-based (with a small Transformer fallback for ambiguous cases), so you can phrase the same prompt in many ways and still get the same 18-field output.
+
+**Note on input format:** the airfoil image is extracted via sub-pixel iso-contour tracking (`skimage.measure.find_contours`) and then Kulfan-fitted by aerosandbox. For highest precision, upload a `.dat` file directly (it bypasses image extraction entirely).
 
 ## Architecture
 
