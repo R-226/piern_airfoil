@@ -159,6 +159,36 @@ def _run_baseline(initial_airfoil, params: dict):
     return opt.airfoil, elapsed
 
 
+def _enforce_symmetric_thickness(contour):
+    """Enforce y_upper and y_lower to share the same thickness distribution.
+
+    Image-based Kulfan fitting sometimes breaks thickness symmetry (e.g. NACA 0012
+    extracted as TE_angle=-12° instead of +16°). This helper preserves the
+    camber line (y_mid) but symmetrizes the thickness about it:
+        y_upper = y_mid + |thickness|
+        y_lower = y_mid - |thickness|
+
+    This is safe for both symmetric (NACA 0012) and cambered (Clark Y) airfoils:
+    we only average out the per-side fitting noise, not the camber itself.
+
+    Args:
+        contour: AirfoilContour with x_surface, y_upper, y_lower.
+
+    Returns:
+        New AirfoilContour with enforced thickness symmetry.
+    """
+    from piern.view.extract import AirfoilContour
+
+    y_mid = (contour.y_upper + contour.y_lower) / 2.0
+    # thickness: positive number representing half-thickness at each x
+    thickness = np.abs(contour.y_upper - contour.y_lower) / 2.0
+    return AirfoilContour(
+        x_surface=contour.x_surface.copy(),
+        y_upper=y_mid + thickness,
+        y_lower=y_mid - thickness,
+    )
+
+
 # ── Main callback ─────────────────────────────────────────────────
 
 
@@ -167,23 +197,28 @@ def run_optimization(
     image,
     dat_file,
     router_mode: str,
-    extract_method: str = "auto",
 ):
-    """Extract inputs, run hierarchical + baseline optimization, compare results."""
+    """Extract inputs, run hierarchical + baseline optimization, compare results.
+
+    Image extraction uses skimage.find_contours (sub-pixel accurate).
+    .dat files are loaded directly with full precision.
+    """
     import aerosandbox as asb
 
     # 1. Extract parameters from prompt
     params = extract_params_from_prompt(prompt) if prompt and prompt.strip() else {}
 
     # 2. Extract contour from image or .dat file (.dat takes priority)
-    file_path = None
-    effective_method = extract_method
     if dat_file is not None:
         file_path = dat_file if isinstance(dat_file, str) else dat_file.name
-        effective_method = "dat"
+        method = "dat"
     elif image is not None:
         file_path = image
-    contour, contour_fig = extract_contour_from_input(file_path, method=effective_method)
+        method = "auto"
+    else:
+        file_path = None
+        method = "auto"
+    contour, contour_fig = extract_contour_from_input(file_path, method=method)
 
     # 3. Build initial airfoil
     if contour is not None:
@@ -238,6 +273,8 @@ def run_optimization(
             "CD": f"{r['cd']:.6f}",
             "Time": f"{r['time']:.2f}s",
         }
+    elif "baseline" in results and "error" in results["baseline"]:
+        summary["Baseline (8w IPOPT)"] = {"error": results["baseline"]["error"]}
     if "piern" in results and "error" not in results["piern"]:
         r = results["piern"]
         summary["Adaptive Router"] = {
@@ -245,6 +282,8 @@ def run_optimization(
             "Time": f"{r['time']:.2f}s",
             "Stages": len(r["stages"]),
         }
+    elif "piern" in results and "error" in results["piern"]:
+        summary["Adaptive Router"] = {"error": results["piern"]["error"]}
     summary["Initial"] = {"CD": f"{init_cd:.6f}"}
 
     return params, contour_fig, summary, comparison_fig
@@ -341,11 +380,6 @@ def build_app() -> gr.Blocks:
                     label="Or upload .dat file (optional)",
                     file_types=[".dat"],
                 )
-                extract_method = gr.Radio(
-                    choices=["auto", "edge", "color", "dat"],
-                    value="auto",
-                    label="Extraction method",
-                )
                 router_mode = gr.Radio(
                     choices=["mlp", "threshold", "rule"],
                     value="mlp",
@@ -365,7 +399,7 @@ def build_app() -> gr.Blocks:
 
         run_btn.click(
             fn=run_optimization,
-            inputs=[prompt_input, image_input, dat_input, router_mode, extract_method],
+            inputs=[prompt_input, image_input, dat_input, router_mode],
             outputs=[params_output, contour_plot, result_output, comparison_plot],
         )
 
@@ -374,4 +408,4 @@ def build_app() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = build_app()
-    demo.launch()
+    demo.launch(show_error=True)
