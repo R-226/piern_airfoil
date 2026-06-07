@@ -94,17 +94,32 @@ cd src/piern/view && uv run python app.py
 3. Leave **Router mode** at the default `mlp`.
 4. Click **Optimize**. Expect ~10s for end-to-end run on NACA 0012; results appear in the **Summary** and **Shape & Performance Comparison** panels.
 
-**Example prompt (copy-paste ready):**
+**Example prompt (copy-paste ready, verified end-to-end on NACA 0012):**
 
-> 在 Re=500e3*(CL/1.25)^-0.5、Mach=0.03 的条件下，优化附加图片中翼型的升阻比。我需要在升力系数 CL=[0.8, 1.0, 1.2, 1.4, 1.5, 1.6] 的工况下，按权重 [5, 6, 7, 8, 9, 10] 优化加权阻力。同时要求在任意升力系数下：
-> - 力矩系数不小于 -0.133
-> - 后缘角度不小于 6.03 度
-> - 前缘角度为 180 度（光滑）
-> - 三分之一弦长处相对厚度不小于 0.128
-> - 90% 弦长处相对厚度不小于 0.014
-> 基于这样的条件对翼型进行优化。
+> 在满足Re=500k(CL/1.25)^{-0.5}、Mach=0.03的条件下，我想要优化附加图片当中的翼型。为了对所需的条件下尽可能提高升阻比，我们需要对升力系数CL=[0.8,1.0,1.2,1.4,1.5,1.6]的条件下的阻力按照权重[5,6,7,8,9,10]来进行优化，要求在任意升力系数下，力矩系数不小于-0.133，同时为了保证机翼的物理强度我们要求后缘角度在6.03度以上，前缘角为180度（即前缘光滑），同时我们要求前段位于三分之一处机翼相对厚度不小于0.128,后段相对弦长90%处相对厚度不小于0.014。基于这样的条件对翼型进行优化
 
 **What the prompt is parsed into (18 output fields):**
+
+| Field | Value (verified on NACA 0012) |
+|---|---|
+| `Mach` | `0.03` |
+| `CL` | `[0.8, 1.0, 1.2, 1.4, 1.5, 1.6]` |
+| `weights` | `[5, 6, 7, 8, 9, 10]` |
+| `CM_lower_bound` | `-0.133` |
+| `Trailing_edge_angle_lower_bound` | `6.03` |
+| `Leading_edge_angle` | `180.0` |
+| `thickness_head_lower_bound` (`t@33%`) | `0.128` |
+| `thickness_tail_lower_bound` (`t@90%`) | `0.014` |
+
+Expected end-to-end result on NACA 0012:
+
+| Method | CD | Time | Stages |
+|---|---|---|---|
+| Initial (extracted) | 0.0754 | - | - |
+| Baseline (8w IPOPT) | 0.0722 | ~2.5s | 1 |
+| **Adaptive Router** | **0.0711** | ~10s | **2** |
+
+The Chinese number parser is regex-based (with a small Transformer fallback for ambiguous cases), so you can phrase the same prompt in many ways and still get the same 18-field output. **Tip:** the parser matches numbers positionally, so avoid inlining extra formulas or symbols (`e3`, `^`, parenthesized expressions) in the same line as the actual field values — list Mach, CL, and weights on dedicated lines and the parser stays reliable.
 
 | Category | Count | Fields |
 |---|---|---|
