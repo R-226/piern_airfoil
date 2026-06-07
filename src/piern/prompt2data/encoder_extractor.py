@@ -13,15 +13,18 @@ Model size: ~5M params (fits in <100MB, inference <5ms on GPU)
 
 import json
 import re
+from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from typing import Optional
 
-NORM_PATH = "./data/2com/normalization_params.json"
-TRAIN_DATA = "./data/2com/train_data.jsonl"
-SAVE_DIR = "./checkpoint/t2c/encoder_extractor.pt"
+# Resolve paths relative to project root, not CWD
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+NORM_PATH = str(_PROJECT_ROOT / "data/2com/normalization_params.json")
+TRAIN_DATA = str(_PROJECT_ROOT / "data/2com/train_data.jsonl")
+SAVE_DIR = str(_PROJECT_ROOT / "checkpoint/t2c/encoder_extractor.pt")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Field names (18 output classes: 1 Mach + 6 CL + 6 weights + 5 constraints)
