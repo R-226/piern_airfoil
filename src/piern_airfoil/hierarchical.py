@@ -306,13 +306,34 @@ class AdaptiveHierarchicalOptimizer:
             except (ValueError, RuntimeError) as e:
                 if n_active < 8:
                     # 低维度约束不可行，用原始翼型权重做初始点 fallback 到 8 权重
-                    orig_weights = (initial_airfoil.upper_weights, initial_airfoil.lower_weights)
-                    result_airfoil, result_weights = self._run_stage(
-                        initial_airfoil, 8, orig_weights
-                    )
-                    n_active = 8
+                    try:
+                        orig_weights = (initial_airfoil.upper_weights, initial_airfoil.lower_weights)
+                        result_airfoil, result_weights = self._run_stage(
+                            initial_airfoil, 8, orig_weights
+                        )
+                        n_active = 8
+                    except (ValueError, RuntimeError) as e2:
+                        # Fallback also failed: skip this stage, keep current_airfoil as best so far
+                        decision_log.append({
+                            "stage": stage_idx + 1,
+                            "n_active": n_active,
+                            "cd": None,
+                            "decision": f"stage failed: {e2}; keeping previous airfoil",
+                        })
+                        if verbose:
+                            print(f"    [warn] stage {stage_idx+1} failed and fallback also failed: {e2}")
+                        continue
                 else:
-                    raise
+                    # 8 维也失败: 跳过这个 stage, 用之前的 best airfoil 继续
+                    decision_log.append({
+                        "stage": stage_idx + 1,
+                        "n_active": n_active,
+                        "cd": None,
+                        "decision": f"stage failed: {e}; keeping previous airfoil",
+                    })
+                    if verbose:
+                        print(f"    [warn] stage {stage_idx+1} (8w) failed: {e}")
+                    continue
             stage_time = time.perf_counter() - t_stage
 
             # 评估结果
@@ -358,7 +379,16 @@ class AdaptiveHierarchicalOptimizer:
 
         elapsed = time.perf_counter() - t0
 
-        # 找到最佳结果
+        # 找到最佳结果；如果所有 stage 都失败则返回初始翼型
+        if not history:
+            return HierarchicalResult(
+                airfoil=initial_airfoil,
+                final_cd=init_cd,
+                total_time=elapsed,
+                stages=[],
+                decision_log=decision_log,
+            )
+
         best_stage = min(history, key=lambda h: h.cd)
 
         return HierarchicalResult(
